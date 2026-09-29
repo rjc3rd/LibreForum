@@ -26,4 +26,6 @@ PHP 8.2 or newer and MySQL or MariaDB. No other services.
 
 ## License
 
+Copyright (C) 2026 Ranzy Campbell.
+
 [GNU Affero General Public License v3.0](LICENSE). If you run a modified copy for other people, they get your changes too.
