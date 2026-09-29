@@ -5,6 +5,8 @@
 //   php bin/member.php moderator|member maya     (change a role)
 //   php bin/member.php remove maya               (what they wrote stays, as "Former member")
 //   php bin/member.php password maya             (a new password for someone who lost theirs, asked for and not shown)
+//   php bin/member.php host-only maya 42         (from now on maya comes in only through the app that runs the forum,
+//                                                 whose id for her is 42: her password is erased and her logins end)
 
 declare(strict_types=1);
 
@@ -36,6 +38,11 @@ switch ($cmd) {
         };
         echo $problem ?? 'Done.', "\n";
         exit($problem === null ? 0 : 1);
+    case 'host-only':
+        $id = lf_cli_member_id($pdo, $argv[2] ?? '');
+        $problem = lf_member_make_host_only($pdo, $id, (string) ($argv[3] ?? ''));
+        echo $problem ?? 'Done. They come in only through the app that runs the forum now, with no password.', "\n";
+        exit($problem === null ? 0 : 1);
     case 'password':
         $id = lf_cli_member_id($pdo, $argv[2] ?? '');
         $password = lf_cli_password();
@@ -46,5 +53,5 @@ switch ($cmd) {
         echo $problem ?? 'Password changed. Any logins they had were ended.', "\n";
         exit($problem === null ? 0 : 1);
     default:
-        echo "Usage: php bin/member.php list | mute | unmute | moderator | member | remove | password <username>\n";
+        echo "Usage: php bin/member.php list | mute | unmute | moderator | member | remove | password | host-only <username> [host id]\n";
 }

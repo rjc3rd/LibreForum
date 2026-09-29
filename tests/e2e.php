@@ -98,6 +98,8 @@ check('roles change', cli('member', ['moderator', 'maya'])[1] === 'Done.' && one
 check('a lost password can be replaced, and old logins end', cli('member', ['password', 'maya'], "new maya password\nnew maya password\n")[1] === 'Password changed. Any logins they had were ended.'
     && lf_session_lookup($pdo, (string) $token) === null && lf_login($pdo, 'maya', 'new maya password', '198.51.100.1')[0] === null && lf_login($pdo, 'maya', 'maya password 1', '198.51.100.1')[0] !== null);
 check('a mismatched new password is refused', cli('member', ['password', 'maya'], "new maya password\nnew maya passworX\n")[0] === 1);
+check('a member can be made to come in only through a host app', cli('member', ['host-only', 'maya', '77'])[0] === 0 && one($pdo, "SELECT password_hash FROM members WHERE id = $mayaId") === null
+    && one($pdo, "SELECT host_ref FROM members WHERE id = $mayaId") === '77' && lf_login($pdo, 'maya', 'new maya password', '198.51.100.1')[0] !== null && cli('member', ['host-only', 'maya', 'bad id!'])[0] === 1);
 check('removing a member, and unknown members', cli('member', ['remove', 'maya'])[1] === 'Done.' && one($pdo, "SELECT status FROM members WHERE id = $mayaId") === 'removed' && str_contains(cli('member', ['mute', 'nobody'])[1], 'There is no member called nobody.'));
 check('the owner can’t be removed from here either', cli('member', ['remove', 'cliboss'])[0] === 1);
 

@@ -8,6 +8,9 @@ declare(strict_types=1);
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/perm.php';
 
+// What a host app's id for a person or an account may look like.
+const LF_HOST_ID = '~^[A-Za-z0-9._:@-]{1,100}$~D';
+
 // The same name in a form that ignores capitals and underscores, so nobody can register "Ranzy_" next to "ranzy".
 function lf_username_key(string $name): string
 {
@@ -209,6 +212,30 @@ function lf_member_wipe(PDO $pdo, int $memberId): void
     $pdo->prepare("UPDATE members SET status = 'removed', role = 'member', username = NULL, username_key = NULL, password_hash = NULL WHERE id = :m")->execute(['m' => $memberId]);
     $pdo->prepare("DELETE FROM sessions WHERE member_id = :m")->execute(['m' => $memberId]);
     $pdo->prepare("DELETE FROM thread_reads WHERE member_id = :m")->execute(['m' => $memberId]);
+}
+
+// Makes a member come in only through the app that runs the forum: their password is erased, their host
+// id is set and their logins end. For an account that was made with a password before the host took over.
+// Returns a message when it can't be done.
+function lf_member_make_host_only(PDO $pdo, int $memberId, string $hostRef): ?string
+{
+    if (!preg_match(LF_HOST_ID, $hostRef)) {
+        return 'That host id isn’t valid.';
+    }
+    $member = lf_member_get($pdo, $memberId);
+    if ($member === null || $member['status'] === 'removed') {
+        return 'That member doesn’t exist.';
+    }
+    try {
+        $pdo->prepare("UPDATE members SET password_hash = NULL, host_ref = :h WHERE id = :m")->execute(['h' => $hostRef, 'm' => $memberId]);
+    } catch (PDOException $e) {
+        if (lf_is_duplicate($e)) {
+            return 'Somebody else already has that host id.';
+        }
+        throw $e;
+    }
+    lf_sessions_end_all($pdo, $memberId);
+    return null;
 }
 
 // What to show as a name: the username, or "Former member" for someone who left.

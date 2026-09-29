@@ -584,6 +584,15 @@ check('a host’s member can’t log in on the forum’s own page, even with a p
 lf_member_set_username($pdo, $hostMemberId, 'Hosted');
 check('nor one who chose a name and never had a password', lf_login($pdo, 'hosted', '', '203.0.113.60')[0] !== null && lf_login($pdo, 'hosted', 'anything at all', '203.0.113.60')[0] !== null);
 
+$convert = mk($pdo, 'Convert');
+[, $convertToken] = lf_login($pdo, 'convert', 'password-for-tests', '203.0.113.62');
+check('somebody with a password can be made to come in only through the host: password erased, host id set, logins ended', lf_member_make_host_only($pdo, (int) $convert['id'], 'r-conv') === null
+    && one($pdo, "SELECT password_hash FROM members WHERE id = {$convert['id']}") === null && one($pdo, "SELECT host_ref FROM members WHERE id = {$convert['id']}") === 'r-conv'
+    && lf_session_lookup($pdo, (string) $convertToken) === null && lf_login($pdo, 'convert', 'password-for-tests', '203.0.113.62')[0] !== null);
+check('a bad or taken host id, someone who left and someone who isn’t there are refused', lf_member_make_host_only($pdo, (int) $convert['id'], 'bad id!') === 'That host id isn’t valid.'
+    && lf_member_make_host_only($pdo, (int) $alice['id'], 'r-conv') === 'Somebody else already has that host id.' && lf_member_make_host_only($pdo, (int) $secondId, 'r-x') === 'That member doesn’t exist.'
+    && lf_member_make_host_only($pdo, 999999, 'r-y') === 'That member doesn’t exist.');
+
 cfg(['host' => ['idle_minutes' => 30, 'max_hours' => 2]]);
 $hostToken = lf_session_start($pdo, $hostMemberId, true);
 $hostSession = lf_session_lookup($pdo, $hostToken);

@@ -67,7 +67,7 @@ Want to see it with some conversations in it first? `php bin/demo.php` fills an 
 | `php bin/owner.php name "Forum name" [--host-ref=ID]` | Creates the owner, instead of the setup page. With `--host-ref` the owner has no password (see "Running it inside another app"). |
 | `php bin/invite.php [member\|moderator] [days]` | Prints an invitation link. |
 | `php bin/category.php list \| add \| rename \| staff-only \| up \| down \| delete` | Manages categories. |
-| `php bin/member.php list \| mute \| unmute \| moderator \| member \| remove \| password` | Manages people. `password` sets a new password for someone who lost theirs. |
+| `php bin/member.php list \| mute \| unmute \| moderator \| member \| remove \| password \| host-only` | Manages people. `password` sets a new password for someone who lost theirs. `host-only name ID` makes someone come in only through the app that runs the forum (their password is erased). |
 | `php bin/maintain.php [--quiet]` | Daily housekeeping. |
 | `php bin/demo.php` | Fills an empty forum with pretend conversations. |
 | `php -S 127.0.0.1:8080 -t public bin/router.php` | Runs the forum on your own computer with PHP's built-in web server, for trying it out. |

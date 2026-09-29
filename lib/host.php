@@ -20,7 +20,6 @@ require_once __DIR__ . '/text.php';
 
 const LF_HOST_MAX_LIFETIME = 300;
 const LF_HOST_LINK_USED = 'This link was already used. Please open the forum again from your account.';
-const LF_HOST_ID = '~^[A-Za-z0-9._:@-]{1,100}$~D';
 
 function lf_b64u(string $binary): string
 {

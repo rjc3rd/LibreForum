@@ -85,7 +85,7 @@ function lf_setup_owner(PDO $pdo, string $forumName, string $username, string $p
     if ($forumName === '' || mb_strlen($forumName) > 60) {
         return ['Please name your forum (up to 60 characters).', null];
     }
-    if ($hostRef !== null && !preg_match('~^[A-Za-z0-9._:@-]{1,100}$~D', $hostRef)) {
+    if ($hostRef !== null && !preg_match(LF_HOST_ID, $hostRef)) {
         return ['That host id isn’t valid.', null];
     }
     $problem = lf_username_problem($pdo, $username, true) ?? ($hostRef === null ? lf_password_problem($password, $confirm) : null);
