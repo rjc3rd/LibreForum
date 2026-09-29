@@ -20,6 +20,17 @@ function lf_url(string $path = ''): string
     return lf_base() . '/' . ltrim($path, '/');
 }
 
+// A full web address inside the forum, for links people copy (invitations).
+function lf_abs_url(string $path): string
+{
+    $root = rtrim((string) lf_cfg('url', ''), '/');
+    if ($root === '') {
+        $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
+        $root = $host !== '' ? (lf_is_https() ? 'https' : 'http') . '://' . $host . lf_base() : lf_base();
+    }
+    return $root . '/' . ltrim($path, '/');
+}
+
 // The page being asked for, without the folder and the query string: '/', '/t/12', '/c/help'.
 function lf_route_path(): string
 {

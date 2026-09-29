@@ -106,7 +106,8 @@ CREATE TABLE IF NOT EXISTS invites (
   account_id  INT UNSIGNED NOT NULL,
   token_hash  BINARY(32) NOT NULL,
   role        ENUM('member','moderator') NOT NULL DEFAULT 'member',
-  created_by  INT UNSIGNED NOT NULL,
+  created_by  INT UNSIGNED NOT NULL,                   -- the member who made it, or 0 when a host app did
+  note        VARCHAR(100) NOT NULL DEFAULT '',        -- who it is for, so a list of open invitations makes sense
   created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   expires_at  DATETIME NOT NULL,
   used_at     DATETIME NULL,

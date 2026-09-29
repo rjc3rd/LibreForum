@@ -40,11 +40,6 @@ function lf_slugify(string $name): string
     return substr($slug, 0, 40) ?: 'category';
 }
 
-function lf_clean_line(string $text): string
-{
-    return trim(preg_replace('~\s+~u', ' ', lf_clean_text($text)) ?? '');
-}
-
 // The owner adds a category. Returns [message, null] or [null, id].
 function lf_category_add(PDO $pdo, array $me, string $name, string $description, bool $staffOnly): array
 {

@@ -214,6 +214,24 @@ function to(array $res, string $path): bool
 {
     return $res['status'] === 303 && $res['location'] === $path;
 }
+// A signed request from the pretend host app to /host/api. $tweak can change the time, nonce, secret or body.
+function host_api(string $base, array $payload, array $tweak = []): array
+{
+    $signed = json_encode($payload);
+    $body = $tweak['body'] ?? $signed;   // what is sent can differ from what was signed
+    $time = (string) ($tweak['time'] ?? time());
+    $nonce = $tweak['nonce'] ?? bin2hex(random_bytes(16));
+    $signature = hash_hmac('sha256', "$time.$nonce.$signed", $tweak['secret'] ?? 'e2e-host-secret-0123456789abcdef0123456789abcdef');
+    $ch = curl_init($base . '/host/api');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_HEADER => true, CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json', "X-Host-Time: $time", "X-Host-Nonce: $nonce", "X-Host-Signature: $signature", 'Expect:']]);
+    $raw = (string) curl_exec($ch);
+    $size = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    $result = ['status' => (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE), 'head' => substr($raw, 0, $size), 'json' => json_decode(substr($raw, $size), true), 'nonce' => $nonce, 'time' => $time];
+    curl_close($ch);
+    return $result;
+}
+
 $guest = new Browser($base);
 $owner = new Browser($base);
 $alice = new Browser($base);
@@ -405,6 +423,34 @@ $res = $hostUser->post('/logout', ['csrf' => csrf($hostUser->get('/'))], $origin
 check('logging out works', to($res, '/login') && to($hostUser->get('/'), '/login'));
 check('the second entry for the same person is the same member', to($hostUser->get('/enter?t=' . lf_host_token_make(['ref' => 'e2e-1', 'acct' => 'e2e-A'], $hostSecret)), '/') && (int) one($pdo, "SELECT COUNT(*) FROM members WHERE host_ref = 'e2e-1'") === 1
     && $hostUser->get('/')['status'] === 200);
+
+echo "A host account's team, over HTTP\n";
+$res = host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A']);
+check('the host lists a team, with no cookies involved', $res['status'] === 200 && $res['json']['ok'] === true && $res['json']['members'] === [] && $res['json']['seats']['limit'] === 5 && !str_contains(strtolower($res['head']), 'set-cookie'));
+$res = host_api($base, ['op' => 'team.invite', 'acct' => 'e2e-A', 'note' => 'E2E Sam']);
+$inviteUrl = (string) ($res['json']['url'] ?? '');
+preg_match('~/invite/([0-9a-f]{32})$~', $inviteUrl, $m);
+check('and makes an invitation link, which works on the forum', $res['status'] === 200 && ($m[1] ?? '') !== '' && (($teamPage = (new Browser($base))->get('/invite/' . $m[1]))['status'] === 200) && has($teamPage, 'name="password2"'));
+$teamMember = new Browser($base);
+$res = $teamMember->post('/invite/' . $m[1], ['username' => 'E2ESam', 'password' => 'e2e sam password', 'password2' => 'e2e sam password'], $origin);
+check('the person joins, and is in the forum with their own password', to($res, '/') && $teamMember->get('/')['status'] === 200 && to((new Browser($base))->post('/login', ['username' => 'e2esam', 'password' => 'e2e sam password'], $origin), '/'));
+$res = host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A']);
+$samId = $res['json']['members'][0]['id'] ?? 0;
+check('the host sees them on the team', $res['json']['members'][0]['username'] === 'E2ESam' && $res['json']['seats']['used'] === 2 && $res['json']['invites'] === []);
+$listNonce = bin2hex(random_bytes(16));
+host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A'], ['nonce' => $listNonce]);
+check('a request can’t be sent twice, or with another secret, a changed body or an old time', host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A'], ['nonce' => $listNonce])['status'] === 401
+    && host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A'], ['secret' => 'not the secret'])['status'] === 401 && host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A'], ['body' => '{"op":"team.list","acct":"other"}', 'time' => (string) time()])['status'] === 401
+    && host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A'], ['time' => time() - 1000])['status'] === 401);
+$ch = curl_init($base . '/host/api');
+curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_POSTFIELDS => '{"op":"team.list","acct":"e2e-A"}']);
+curl_exec($ch);
+check('an unsigned request gets nothing', curl_getinfo($ch, CURLINFO_RESPONSE_CODE) === 401);
+curl_close($ch);
+check('another account can’t reach this team', host_api($base, ['op' => 'team.remove', 'acct' => 'somebody-else', 'member' => $samId])['status'] === 409 && host_api($base, ['op' => 'team.list', 'acct' => 'somebody-else'])['json']['members'] === []);
+check('the holder removes them, and they can no longer log in', host_api($base, ['op' => 'team.remove', 'acct' => 'e2e-A', 'member' => $samId])['status'] === 200
+    && has((new Browser($base))->post('/login', ['username' => 'e2esam', 'password' => 'e2e sam password'], $origin), 'That username and password don’t match.') && to($teamMember->get('/'), '/login'));
+check('GET is not the way to talk to it', $guest->get('/host/api')['status'] === 404);
 
 echo "Odds and ends\n";
 check('unknown pages are not found', $owner->get('/nope')['status'] === 404 && $owner->get('/t/9999')['status'] === 404 && $owner->get('/t/abc')['status'] === 404 && $owner->get('/c/nope')['status'] === 404 && $owner->get('/logout')['status'] === 404);

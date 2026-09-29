@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/perm.php';
+require_once __DIR__ . '/text.php';
 
 // What a host app's id for a person or an account may look like.
 const LF_HOST_ID = '~^[A-Za-z0-9._:@-]{1,100}$~D';
@@ -52,24 +53,37 @@ function lf_account_create(PDO $pdo, string $name, ?int $memberLimit = null): in
     return (int) $pdo->lastInsertId();
 }
 
+// How many people a host account may have (host.team_limit in config.php, 5 unless set, 0 for no limit).
+function lf_host_default_limit(): ?int
+{
+    $limit = (int) lf_cfg('host.team_limit', 5);
+    return $limit > 0 ? $limit : null;
+}
+
+// The forum account for a host app's account id, or null when nobody from it has come yet.
+function lf_account_id_for_host(PDO $pdo, string $hostAccount): ?int
+{
+    $stmt = $pdo->prepare("SELECT id FROM accounts WHERE host_ref = :h");
+    $stmt->execute(['h' => $hostAccount]);
+    $id = $stmt->fetchColumn();
+    return $id === false ? null : (int) $id;
+}
+
 // The forum account for a host app's account id (made the first time), so the people of one account belong together.
 function lf_account_for_host(PDO $pdo, string $hostAccount, string $name): int
 {
-    $find = $pdo->prepare("SELECT id FROM accounts WHERE host_ref = :h");
-    $find->execute(['h' => $hostAccount]);
-    if (($id = $find->fetchColumn()) !== false) {
-        return (int) $id;
+    if (($id = lf_account_id_for_host($pdo, $hostAccount)) !== null) {
+        return $id;
     }
     try {
-        $pdo->prepare("INSERT INTO accounts (name, host_ref, created_at) VALUES (:n, :h, :t)")
-            ->execute(['n' => $name !== '' ? mb_substr($name, 0, 100) : 'Account ' . $hostAccount, 'h' => $hostAccount, 't' => lf_now()]);
+        $pdo->prepare("INSERT INTO accounts (name, member_limit, host_ref, created_at) VALUES (:n, :l, :h, :t)")
+            ->execute(['n' => $name !== '' ? mb_substr($name, 0, 100) : 'Account ' . $hostAccount, 'l' => lf_host_default_limit(), 'h' => $hostAccount, 't' => lf_now()]);
         return (int) $pdo->lastInsertId();
     } catch (PDOException $e) {
         if (!lf_is_duplicate($e)) {
             throw $e;
         }
-        $find->execute(['h' => $hostAccount]);   // someone else made it a moment ago
-        return (int) $find->fetchColumn();
+        return (int) lf_account_id_for_host($pdo, $hostAccount);   // someone else made it a moment ago
     }
 }
 
@@ -217,7 +231,7 @@ function lf_member_wipe(PDO $pdo, int $memberId): void
 // Makes a member come in only through the app that runs the forum: their password is erased, their host
 // id is set and their logins end. For an account that was made with a password before the host took over.
 // Returns a message when it can't be done.
-function lf_member_make_host_only(PDO $pdo, int $memberId, string $hostRef): ?string
+function lf_member_make_host_only(PDO $pdo, int $memberId, string $hostRef, ?string $hostAccount = null): ?string
 {
     if (!preg_match(LF_HOST_ID, $hostRef)) {
         return 'That host id isn’t valid.';
@@ -234,7 +248,67 @@ function lf_member_make_host_only(PDO $pdo, int $memberId, string $hostRef): ?st
         }
         throw $e;
     }
+    // Their account gets the host's id for it too (the host's account and person share an id unless told otherwise),
+    // which is how the host's team page finds it.
+    $pdo->prepare("UPDATE accounts SET host_ref = :h WHERE id = :a AND host_ref IS NULL")->execute(['h' => $hostAccount ?? $hostRef, 'a' => $member['account_id']]);
     lf_sessions_end_all($pdo, $memberId);
+    return null;
+}
+
+// ---------- a host account's team ----------
+
+// The people of an account who log in on the forum's own page, the open invitations and the places used. The
+// host's own people (the account holders) come in through the host and are not the team.
+function lf_team_list(PDO $pdo, int $accountId): array
+{
+    $stmt = $pdo->prepare(
+        "SELECT id, username, status, created_at, last_seen_at FROM members
+         WHERE account_id = :a AND host_ref IS NULL AND status <> 'removed' ORDER BY username_key IS NULL, username_key"
+    );
+    $stmt->execute(['a' => $accountId]);
+    return ['members' => $stmt->fetchAll(), 'invites' => array_values(array_filter(lf_invites_open($pdo, $accountId), fn ($i) => $i['role'] === 'member')), 'seats' => lf_account_seats($pdo, $accountId)];
+}
+
+// A one-time link for somebody the account holder wants on their team. $note says who it is for. Returns
+// [message, null, null] or [null, token, expires].
+function lf_team_invite(PDO $pdo, int $accountId, string $note, int $days = 7): array
+{
+    $note = mb_substr(lf_clean_line($note), 0, 100);
+    if ($note === '') {
+        return ['Please say who the invitation is for.', null, null];
+    }
+    if (lf_account_full($pdo, $accountId)) {
+        return ['This account has no free places left.', null, null];
+    }
+    $token = bin2hex(random_bytes(16));
+    $expires = gmdate('Y-m-d H:i:s', time() + max(1, min(30, $days)) * 86400);
+    $pdo->prepare("INSERT INTO invites (account_id, token_hash, role, created_by, note, created_at, expires_at) VALUES (:a, :h, 'member', 0, :n, :c, :e)")
+        ->execute(['a' => $accountId, 'h' => lf_token_hash($token), 'n' => $note, 'c' => lf_now(), 'e' => $expires]);
+    return [null, $token, $expires];
+}
+
+function lf_team_revoke(PDO $pdo, int $accountId, int $inviteId): void
+{
+    $pdo->prepare("DELETE FROM invites WHERE id = :i AND account_id = :a AND used_at IS NULL")->execute(['i' => $inviteId, 'a' => $accountId]);
+}
+
+// Takes somebody off the team. What they wrote stays, shown as "Former member". Account holders and the
+// forum's staff can't be removed this way.
+function lf_team_remove(PDO $pdo, int $accountId, int $memberId): ?string
+{
+    $stmt = $pdo->prepare("SELECT id, role, status, host_ref FROM members WHERE id = :m AND account_id = :a");
+    $stmt->execute(['m' => $memberId, 'a' => $accountId]);
+    $member = $stmt->fetch();
+    if (!$member || $member['status'] === 'removed') {
+        return 'That person isn’t on your team.';
+    }
+    if ($member['host_ref'] !== null) {
+        return 'That is an account holder, not a team member.';
+    }
+    if ($member['role'] !== 'member') {
+        return 'Moderators can only be removed by the forum’s owner.';
+    }
+    lf_member_wipe($pdo, $memberId);
     return null;
 }
 
@@ -278,7 +352,7 @@ function lf_invite_find(PDO $pdo, string $token): ?array
 
 function lf_invites_open(PDO $pdo, int $accountId): array
 {
-    $stmt = $pdo->prepare("SELECT id, role, created_at, expires_at FROM invites WHERE account_id = :a AND used_at IS NULL AND expires_at > :n ORDER BY id DESC");
+    $stmt = $pdo->prepare("SELECT id, role, note, created_at, expires_at FROM invites WHERE account_id = :a AND used_at IS NULL AND expires_at > :n ORDER BY id DESC");
     $stmt->execute(['a' => $accountId, 'n' => lf_now()]);
     return $stmt->fetchAll();
 }

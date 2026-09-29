@@ -19,17 +19,6 @@ function lf_rules_lines(string $rules): array
     return array_values(array_filter(array_map('trim', preg_split('~\n+~', $rules) ?: [])));
 }
 
-// A full web address inside the forum, for links people copy (invitations).
-function lf_abs_url(string $path): string
-{
-    $root = rtrim((string) lf_cfg('url', ''), '/');
-    if ($root === '') {
-        $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
-        $root = $host !== '' ? (lf_is_https() ? 'https' : 'http') . '://' . $host . lf_base() : lf_base();
-    }
-    return $root . '/' . ltrim($path, '/');
-}
-
 // Shows a template inside the theme's layout, with what every page needs.
 function lf_show(array $req, string $template, array $vars = [], int $status = 200): void
 {
@@ -137,6 +126,7 @@ function lf_routes(): array
         ['POST', '~^/manage/categories/(\d{1,10})/(save|up|down|delete)$~D', 'lf_pg_category_action'],
         ['POST', '~^/manage/forum$~D', 'lf_pg_forum_save'],
         ['GET', '~^/enter$~D', 'lf_pg_enter'],
+        ['POST', '~^/host/api$~D', 'lf_pg_host_api'],
         ['GET', '~^/login$~D', 'lf_pg_login'],
         ['POST', '~^/login$~D', 'lf_pg_login_submit'],
         ['POST', '~^/logout$~D', 'lf_pg_logout'],
@@ -578,6 +568,28 @@ function lf_pg_enter(array $req): void
     }
     lf_cookie_set(lf_session_start($req['pdo'], (int) $memberId, true), true);
     lf_redirect(ltrim((string) ($claims['next'] ?? ''), '/'));
+}
+
+// The host app's own requests (team management), signed with the shared secret. No login, no cookies.
+function lf_pg_host_api(array $req): void
+{
+    $secret = (string) lf_cfg('host.secret', '');
+    header('Content-Type: application/json');
+    if ($secret === '') {
+        http_response_code(404);
+        echo '{"ok":false,"error":"Not available."}';
+        return;
+    }
+    $body = (string) file_get_contents('php://input', false, null, 0, 20001);
+    if (strlen($body) > 20000 || !lf_host_api_verify($req['pdo'], $secret, $body, $_SERVER)) {
+        http_response_code(401);
+        echo '{"ok":false,"error":"Not signed in."}';
+        return;
+    }
+    $input = json_decode($body, true);
+    [$status, $answer] = is_array($input) ? lf_host_api($req['pdo'], $input) : [400, ['ok' => false, 'error' => 'The body has to be JSON.']];
+    http_response_code($status);
+    echo json_encode($answer, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 }
 
 // Where somebody who follows an invitation link chooses their username and password.

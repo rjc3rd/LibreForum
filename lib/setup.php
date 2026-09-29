@@ -40,6 +40,10 @@ function lf_migrate(PDO $pdo): array
         $pdo->exec("ALTER TABLE accounts ADD COLUMN host_ref VARCHAR(100) NULL AFTER member_limit");
         $changes[] = 'accounts.host_ref added';
     }
+    if (!lf_column_exists($pdo, 'invites', 'note')) {
+        $pdo->exec("ALTER TABLE invites ADD COLUMN note VARCHAR(100) NOT NULL DEFAULT '' AFTER created_by");
+        $changes[] = 'invites.note added';
+    }
     if (!lf_index_exists($pdo, 'accounts', 'uq_accounts_host')) {
         $pdo->exec("ALTER TABLE accounts ADD UNIQUE KEY uq_accounts_host (host_ref)");
         $changes[] = 'accounts.host_ref made unique';
@@ -103,6 +107,10 @@ function lf_setup_owner(PDO $pdo, string $forumName, string $username, string $p
         $pdo->prepare("INSERT INTO settings (name, value) VALUES ('owner_created', :t)")->execute(['t' => lf_now()]);
         $accountId = lf_account_create($pdo, $forumName);
         $memberId = lf_member_create($pdo, $accountId, $username, $hash, 'owner', $hostRef);
+        if ($hostRef !== null) {
+            // The host's account and its person are the same thing here, so its team can find this account.
+            $pdo->prepare("UPDATE accounts SET host_ref = :h WHERE id = :a")->execute(['h' => $hostRef, 'a' => $accountId]);
+        }
         lf_setting_set($pdo, 'forum_name', $forumName);
         lf_seed_categories($pdo);
         $pdo->commit();

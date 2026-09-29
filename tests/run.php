@@ -615,12 +615,81 @@ cfg([]);
 check('by default nobody may', lf_frame_ancestors() === []);
 check('a page in a frame is known by the browser’s own header', lf_is_embedded(['HTTP_SEC_FETCH_DEST' => 'iframe']) && !lf_is_embedded(['HTTP_SEC_FETCH_DEST' => 'document']) && !lf_is_embedded([]));
 
+echo "A host account's team\n";
+[$claims] = lf_host_token_verify($make(['ref' => 'holder-A', 'acct' => 'TEAM-A']), $secret);
+$holderId = lf_host_enter($pdo, $claims)[1];
+$teamAccount = (int) lf_account_id_for_host($pdo, 'TEAM-A');
+check('a host account gets the default number of places when it is first made', (int) one($pdo, "SELECT member_limit FROM accounts WHERE id = $teamAccount") === 5 && lf_host_default_limit() === 5);
+check('its team starts empty, with the account holder using one place', lf_team_list($pdo, $teamAccount) === ['members' => [], 'invites' => [], 'seats' => ['used' => 1, 'limit' => 5]]);
+[$problem, $teamToken, $teamExpires] = lf_team_invite($pdo, $teamAccount, "  Maria \n Lopez ");
+check('an invitation is made with a note about who it is for, good for a week', $problem === null && strlen((string) $teamToken) === 32 && lf_team_list($pdo, $teamAccount)['invites'][0]['note'] === 'Maria Lopez'
+    && abs(strtotime((string) $teamExpires . ' UTC') - time() - 7 * 86400) < 10);
+check('it needs a note', lf_team_invite($pdo, $teamAccount, '  ')[0] === 'Please say who the invitation is for.');
+[$err, $teamMemberId] = lf_invite_accept($pdo, (string) $teamToken, 'MariaL', 'a fine password', 'a fine password');
+check('the person follows it and joins that account, logging in with their own password', $err === null && (int) one($pdo, "SELECT account_id FROM members WHERE id = $teamMemberId") === $teamAccount
+    && one($pdo, "SELECT host_ref FROM members WHERE id = $teamMemberId") === null && lf_login($pdo, 'marial', 'a fine password', '203.0.113.70')[0] === null);
+$team = lf_team_list($pdo, $teamAccount);
+check('then they are on the team, and the holder is not', array_column($team['members'], 'username') === ['MariaL'] && $team['invites'] === [] && $team['seats']['used'] === 2);
+$pdo->exec("UPDATE accounts SET member_limit = 2 WHERE id = $teamAccount");
+check('with every place used, nobody more can be invited', lf_team_invite($pdo, $teamAccount, 'Sam')[0] === 'This account has no free places left.');
+$pdo->exec("UPDATE accounts SET member_limit = 5 WHERE id = $teamAccount");
+[, $spareToken] = lf_team_invite($pdo, $teamAccount, 'Sam');
+$spareId = (int) lf_team_list($pdo, $teamAccount)['invites'][0]['id'];
+lf_team_revoke($pdo, $teamAccount + 999, $spareId);
+check('an invitation can only be cancelled from its own account', lf_invite_find($pdo, (string) $spareToken) !== null && (lf_team_revoke($pdo, $teamAccount, $spareId) ?? true) && lf_invite_find($pdo, (string) $spareToken) === null);
+$teamMod = mk($pdo, 'TeamMod', 'moderator', $teamAccount);
+check('an account holder can’t be removed, nor forum staff, nor somebody from another account', lf_team_remove($pdo, $teamAccount, (int) $holderId) === 'That is an account holder, not a team member.'
+    && lf_team_remove($pdo, $teamAccount, (int) $teamMod['id']) === 'Moderators can only be removed by the forum’s owner.' && lf_team_remove($pdo, $teamAccount, (int) $alice['id']) === 'That person isn’t on your team.'
+    && lf_team_remove($pdo, $teamAccount, 999999) === 'That person isn’t on your team.');
+$pdo->exec("DELETE FROM members WHERE id = {$teamMod['id']}");
+check('a team member can be removed: their name and password go, what they wrote stays', lf_team_remove($pdo, $teamAccount, (int) $teamMemberId) === null && one($pdo, "SELECT status FROM members WHERE id = $teamMemberId") === 'removed'
+    && lf_login($pdo, 'marial', 'a fine password', '203.0.113.70')[0] !== null && lf_team_list($pdo, $teamAccount)['members'] === [] && lf_username_problem($pdo, 'MariaL') === null);
+
+$sign = function (string $body, array $tweak = []) use ($secret, $now) {
+    $time = (string) ($tweak['time'] ?? $now);
+    $nonce = $tweak['nonce'] ?? bin2hex(random_bytes(16));
+    return ['HTTP_X_HOST_TIME' => $time, 'HTTP_X_HOST_NONCE' => $nonce, 'HTTP_X_HOST_SIGNATURE' => hash_hmac('sha256', "$time.$nonce.$body", $tweak['secret'] ?? $secret)];
+};
+$body = '{"op":"team.list","acct":"TEAM-A"}';
+$headers = $sign($body);
+check('a signed request checks out, once', lf_host_api_verify($pdo, $secret, $body, $headers, $now) && !lf_host_api_verify($pdo, $secret, $body, $headers, $now));
+check('a changed body, another secret, a stale time and missing or odd headers do not', !lf_host_api_verify($pdo, $secret, $body . ' ', $sign($body), $now) && !lf_host_api_verify($pdo, $secret, $body, $sign($body, ['secret' => 'other']), $now)
+    && !lf_host_api_verify($pdo, $secret, $body, $sign($body, ['time' => $now - 500]), $now) && !lf_host_api_verify($pdo, $secret, $body, $sign($body, ['time' => $now + 500]), $now)
+    && !lf_host_api_verify($pdo, $secret, $body, [], $now) && !lf_host_api_verify($pdo, $secret, $body, $sign($body, ['nonce' => 'short']), $now) && !lf_host_api_verify($pdo, '', $body, $sign($body), $now));
+
+[$status, $answer] = lf_host_api($pdo, ['op' => 'team.list', 'acct' => 'TEAM-A']);
+check('the host can list a team', $status === 200 && $answer['ok'] === true && $answer['members'] === [] && $answer['seats'] === ['used' => 1, 'limit' => 5]);
+[$status, $answer] = lf_host_api($pdo, ['op' => 'team.invite', 'acct' => 'TEAM-A', 'note' => 'Sam Q.', 'days' => 3]);
+$apiToken = basename((string) ($answer['url'] ?? ''));
+check('invite it, with a link that works', $status === 200 && preg_match('~/invite/[0-9a-f]{32}$~', (string) $answer['url']) === 1 && lf_invite_find($pdo, $apiToken) !== null);
+$apiList = lf_host_api($pdo, ['op' => 'team.list', 'acct' => 'TEAM-A'])[1];
+check('it shows in the list with its note', count($apiList['invites']) === 1 && $apiList['invites'][0]['note'] === 'Sam Q.' && $apiList['seats']['used'] === 1);
+$apiMember = lf_invite_accept($pdo, $apiToken, 'SamQ', 'a fine password', 'a fine password')[1];
+check('and once they join they are listed as a member', array_column(lf_host_api($pdo, ['op' => 'team.list', 'acct' => 'TEAM-A'])[1]['members'], 'username') === ['SamQ']);
+[$status, $answer] = lf_host_api($pdo, ['op' => 'team.remove', 'acct' => 'TEAM-B-UNKNOWN', 'member' => $apiMember]);
+check('another account’s host can’t remove them', $status === 409 && $answer['ok'] === false);
+[$status] = lf_host_api($pdo, ['op' => 'team.remove', 'acct' => 'TEAM-A', 'member' => $apiMember]);
+check('their own host can', $status === 200 && lf_host_api($pdo, ['op' => 'team.list', 'acct' => 'TEAM-A'])[1]['members'] === []);
+[, $spare2] = lf_host_api($pdo, ['op' => 'team.invite', 'acct' => 'TEAM-A', 'note' => 'Ana']);
+$spare2Id = lf_host_api($pdo, ['op' => 'team.list', 'acct' => 'TEAM-A'])[1]['invites'][0]['id'];
+check('an invitation can be cancelled', lf_host_api($pdo, ['op' => 'team.revoke', 'acct' => 'TEAM-A', 'invite' => $spare2Id])[0] === 200 && lf_host_api($pdo, ['op' => 'team.list', 'acct' => 'TEAM-A'])[1]['invites'] === []);
+[$status, $answer] = lf_host_api($pdo, ['op' => 'team.list', 'acct' => 'NEVER-SEEN']);
+check('an account nobody has come from yet has an empty team and the default places', $status === 200 && $answer['members'] === [] && $answer['seats'] === ['used' => 0, 'limit' => 5] && lf_account_id_for_host($pdo, 'NEVER-SEEN') === null);
+[$status] = lf_host_api($pdo, ['op' => 'team.invite', 'acct' => 'NEVER-SEEN', 'note' => 'First']);
+check('inviting makes its account, with the default places', $status === 200 && (int) one($pdo, "SELECT member_limit FROM accounts WHERE host_ref = 'NEVER-SEEN'") === 5);
+check('bad requests are refused', lf_host_api($pdo, ['op' => 'team.list'])[0] === 400 && lf_host_api($pdo, ['op' => 'team.list', 'acct' => 'a b'])[0] === 400 && lf_host_api($pdo, ['op' => 'nonsense', 'acct' => 'TEAM-A'])[0] === 400
+    && lf_host_api($pdo, ['op' => 'team.invite', 'acct' => 'TEAM-A', 'note' => ''])[0] === 409);
+cfg(['host' => ['team_limit' => 0]]);
+check('a limit of 0 in the settings means no limit', lf_host_default_limit() === null);
+cfg([]);
+
 echo "Bringing an older database up to date\n";
+$pdo->exec("ALTER TABLE invites DROP COLUMN note");
 $pdo->exec("ALTER TABLE sessions DROP COLUMN via_host");
 $pdo->exec("ALTER TABLE accounts DROP INDEX uq_accounts_host");
 $pdo->exec("ALTER TABLE accounts DROP COLUMN host_ref");
 $changes = lf_install_schema($pdo);
-check('missing columns and keys are added', count($changes) === 3 && lf_column_exists($pdo, 'sessions', 'via_host') && lf_column_exists($pdo, 'accounts', 'host_ref') && lf_index_exists($pdo, 'accounts', 'uq_accounts_host'));
+check('missing columns and keys are added', count($changes) === 4 && lf_column_exists($pdo, 'sessions', 'via_host') && lf_column_exists($pdo, 'accounts', 'host_ref') && lf_index_exists($pdo, 'accounts', 'uq_accounts_host') && lf_column_exists($pdo, 'invites', 'note'));
 check('and doing it again changes nothing', lf_install_schema($pdo) === []);
 
 echo "An owner who only comes in through another app\n";
@@ -634,7 +703,7 @@ check('the host’s id for the owner has to look like one', lf_setup_owner($pdo,
 [$problem, $hostOwnerId] = lf_setup_owner($pdo, 'Host Forum', 'ranzy', '', '', '2');
 $hostOwner = lf_member_get($pdo, (int) $hostOwnerId);
 check('the owner is made with no password, tied to the host’s id for them', $problem === null && $hostOwner['role'] === 'owner' && $hostOwner['host_ref'] === '2' && one($pdo, "SELECT password_hash FROM members WHERE id = $hostOwnerId") === null
-    && (int) one($pdo, "SELECT COUNT(*) FROM categories") === 3 && lf_forum_name($pdo) === 'Host Forum');
+    && (int) one($pdo, "SELECT COUNT(*) FROM categories") === 3 && lf_forum_name($pdo) === 'Host Forum' && lf_account_id_for_host($pdo, '2') === (int) $hostOwner['account_id']);
 check('so nobody can log in as them on the forum’s own page, whatever is typed', lf_login($pdo, 'ranzy', '', '203.0.113.61')[0] === 'That username and password don’t match.'
     && lf_login($pdo, 'ranzy', 'a long enough password', '203.0.113.61')[0] !== null && lf_login($pdo, 'Ranzy', str_repeat('x', 72), '203.0.113.61')[0] !== null && (int) one($pdo, "SELECT COUNT(*) FROM sessions") === 0);
 check('their own way in is the host’s link, and setup is closed for good', lf_host_enter($pdo, lf_host_token_verify($make(['ref' => '2', 'acct' => '2']), $secret)[0])[1] === $hostOwnerId

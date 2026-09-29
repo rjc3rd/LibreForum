@@ -18,6 +18,12 @@ function lf_clean_text(string $text): string
     return preg_replace('~[\x{202A}-\x{202E}\x{2066}-\x{2069}]~u', '', $text) ?? '';
 }
 
+// Any text as one tidy line.
+function lf_clean_line(string $text): string
+{
+    return trim(preg_replace('~\s+~u', ' ', lf_clean_text($text)) ?? '');
+}
+
 // A title is one line.
 function lf_clean_title(string $title): string
 {
