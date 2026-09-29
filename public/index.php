@@ -4,7 +4,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../lib/bootstrap.php';
-foreach (['http', 'theme', 'text', 'salt', 'auth', 'members', 'perm', 'setup', 'forum', 'pages'] as $lib) {
+foreach (['http', 'theme', 'text', 'salt', 'auth', 'members', 'perm', 'setup', 'forum', 'host', 'pages'] as $lib) {
     require_once __DIR__ . "/../lib/$lib.php";
 }
 

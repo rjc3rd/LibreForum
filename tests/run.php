@@ -8,7 +8,7 @@ if (PHP_SAPI !== 'cli') {
     exit("Run from the command line.\n");
 }
 require __DIR__ . '/../lib/bootstrap.php';
-foreach (['http', 'theme', 'text', 'salt', 'auth', 'members', 'perm', 'setup', 'forum', 'maintain', 'pages'] as $lib) {
+foreach (['http', 'theme', 'text', 'salt', 'auth', 'members', 'perm', 'setup', 'forum', 'host', 'maintain', 'pages'] as $lib) {
     require_once __DIR__ . "/../lib/$lib.php";
 }
 
@@ -73,8 +73,8 @@ function tid(array $result): int
 echo "Installing\n";
 lf_install_schema($pdo);
 lf_install_schema($pdo);
-check('the tables are created, and creating them again is harmless', (int) one($pdo, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()") === 12);
-check('the schema file has no semicolons in its comments', count(lf_schema_statements()) === 12);
+check('the tables are created, and creating them again is harmless', (int) one($pdo, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()") === 13);
+check('the schema file has no semicolons in its comments', count(lf_schema_statements()) === 13);
 
 echo "Daily secrets\n";
 $salt = lf_salt($pdo);
@@ -451,7 +451,7 @@ check('old login failures go', (int) one($pdo, "SELECT COUNT(*) FROM login_failu
 check('used-up invitations go and open ones stay', lf_invite_find($pdo, $freshInvite) !== null && (int) one($pdo, "SELECT COUNT(*) FROM invites WHERE token_hash = UNHEX('" . bin2hex(lf_token_hash($usedInvite)) . "')") === 0);
 check('things deleted more than 30 days ago are purged for good, newer ones wait', (int) one($pdo, "SELECT COUNT(*) FROM threads WHERE id = $oldThread") === 0
     && (int) one($pdo, "SELECT COUNT(*) FROM threads WHERE id = $recentThread") === 1 && (int) one($pdo, "SELECT COUNT(*) FROM posts WHERE id = $oldPost") === 0 && (int) one($pdo, "SELECT COUNT(*) FROM posts WHERE thread_id = $oldThread") === 0);
-check('it says what it did', count($log) === 5 && str_contains($log[0], 'expired logins'));
+check('it says what it did', count($log) === 7 && str_contains($log[0], 'expired logins'));
 
 echo "Privacy\n";
 $dump = '';
@@ -483,6 +483,7 @@ mkdir("$themes/mine/assets", 0777, true);
 mkdir("$themes/mine/templates", 0777, true);
 file_put_contents("$themes/mine/assets/custom.css", ':root { --lf-accent: red; }');
 file_put_contents("$themes/mine/templates/rules.php", 'MY RULES');
+file_put_contents("$themes/mine/templates/default-rules.txt", "Theme rule one\nTheme rule two\n");
 cfg(['theme' => 'mine', 'theme_paths' => [$themes]]);
 ob_start();
 lf_render('rules', ['rules' => []]);
@@ -490,7 +491,14 @@ $mine = (string) ob_get_clean();
 check('a theme found in theme_paths can add a stylesheet and replace a page', lf_theme() === 'mine' && lf_theme_file('assets', 'custom.css', true) === "$themes/mine/assets/custom.css" && $mine === 'MY RULES');
 check('everything else still comes from the default theme', realpath((string) lf_theme_file('assets', 'theme.css')) === realpath(LF_ROOT . '/themes/default/assets/theme.css')
     && realpath((string) lf_theme_file('templates', 'list.php')) === realpath(LF_ROOT . '/themes/default/templates/list.php') && lf_theme_file('assets', 'custom.css', false) !== null && lf_theme_file('assets', 'nothing.css') === null);
-foreach (['assets/custom.css', 'templates/rules.php'] as $file) {
+check('a theme can bring its own house rules, which stand until the owner writes some', lf_rules($pdo) === "Theme rule one\nTheme rule two"
+    && (function () use ($pdo) {
+        lf_setting_set($pdo, 'rules', "Owner's rule");
+        $written = lf_rules($pdo) === "Owner's rule";
+        lf_setting_delete($pdo, 'rules');
+        return $written && lf_rules($pdo) === "Theme rule one\nTheme rule two";
+    })());
+foreach (['assets/custom.css', 'templates/rules.php', 'templates/default-rules.txt'] as $file) {
     unlink("$themes/mine/$file");
 }
 rmdir("$themes/mine/assets");
@@ -498,6 +506,7 @@ rmdir("$themes/mine/templates");
 rmdir("$themes/mine");
 rmdir($themes);
 cfg([]);
+check('with no theme wording, the built-in house rules apply', lf_rules($pdo) === LF_DEFAULT_RULES);
 
 echo "Addresses and times\n";
 $saved = $_SERVER;
@@ -530,6 +539,97 @@ check('times are shown as "5 min ago", "3 hours ago" and, after a week, as dates
     && lf_ago('2026-09-29 11:00:00', $now) === '1 hour ago' && lf_ago('2026-09-29 09:00:00', $now) === '3 hours ago' && lf_ago('2026-09-28 12:00:00', $now) === '1 day ago'
     && lf_ago('2026-09-22 12:00:00', $now) === 'Sep 22' && lf_ago('2025-12-25 12:00:00', $now) === 'Dec 25, 2025' && lf_ago('2026-09-29 12:05:00', $now) === 'just now');
 check('and as machine-readable times', lf_iso('2026-09-29 12:00:00') === '2026-09-29T12:00:00Z');
+
+
+echo "Coming in through a host app\n";
+$secret = 'shared-secret-for-the-tests-0123456789abcdef';
+$now = time();
+$make = fn (array $claims = [], ?int $at = null, string $with = null) => lf_host_token_make($claims + ['ref' => '42', 'acct' => '7', 'acct_name' => "Acme \n Co"], $with ?? $secret, $at ?? $now);
+[$claims, $why] = lf_host_token_verify($make(), $secret);
+check('a token made with the shared secret checks out', $why === null && $claims['ref'] === '42' && $claims['acct'] === '7' && $claims['acct_name'] === 'Acme Co' && $claims['exp'] - $claims['iat'] === 60);
+[$payload, $signature] = explode('.', $make());
+$forged = lf_b64u(str_replace('"ref":"42"', '"ref":"2"', (string) lf_b64u_decode($payload))) . '.' . $signature;
+check('a wrong secret, a changed payload, a cut-off or a made-up token do not', lf_host_token_verify($make(), 'another secret')[1] === 'bad signature' && lf_host_token_verify($forged, $secret)[1] === 'bad signature'
+    && lf_host_token_verify(substr($make(), 0, -5), $secret)[1] === 'bad signature' && lf_host_token_verify('nonsense', $secret)[1] === 'malformed' && lf_host_token_verify($make(), '')[1] === 'malformed'
+    && lf_host_token_verify(str_repeat('a', 3000), $secret)[1] === 'malformed');
+check('an expired token, one from the future and one that lives too long do not', lf_host_token_verify($make([], $now - 200), $secret)[1] === 'expired'
+    && lf_host_token_verify($make([], $now + 3600), $secret)[1] === 'bad times' && lf_host_token_verify($make(['exp' => $now + 1000]), $secret)[1] === 'bad times');
+check('odd ids, versions and start pages are refused', lf_host_token_verify($make(['ref' => 'a b']), $secret)[1] === 'bad ref' && lf_host_token_verify($make(['acct' => '']), $secret)[1] === 'bad acct'
+    && lf_host_token_verify($make(['v' => 2]), $secret)[1] === 'unknown version' && lf_host_token_verify($make(['jti' => 'short']), $secret)[1] === 'bad jti'
+    && lf_host_token_verify($make(['next' => 'https://evil.example/']), $secret)[1] === 'bad next' && lf_host_token_verify($make(['next' => '/t/12']), $secret)[1] === null);
+
+[$claims] = lf_host_token_verify($make(['ref' => 'r1', 'acct' => 'A1', 'acct_name' => 'Acme Co']), $secret);
+[$problem, $hostMemberId] = lf_host_enter($pdo, $claims);
+$hostMember = $pdo->query("SELECT m.*, a.host_ref AS account_ref, a.name AS account_name FROM members m JOIN accounts a ON a.id = m.account_id WHERE m.id = $hostMemberId")->fetch();
+check('a first visit makes a member with no name or password, in an account for the host’s account', $problem === null && $hostMember['username'] === null && $hostMember['password_hash'] === null
+    && $hostMember['host_ref'] === 'r1' && $hostMember['role'] === 'member' && $hostMember['account_ref'] === 'A1' && $hostMember['account_name'] === 'Acme Co');
+check('a link can be used only once', lf_host_enter($pdo, $claims)[0] === 'This link was already used. Please open the forum again from your account.');
+[$again] = lf_host_token_verify($make(['ref' => 'r1', 'acct' => 'A1']), $secret);
+check('the same person coming back later is the same member', lf_host_enter($pdo, $again)[1] === $hostMemberId && (int) one($pdo, "SELECT COUNT(*) FROM members WHERE host_ref = 'r1'") === 1);
+[$second] = lf_host_token_verify($make(['ref' => 'r2', 'acct' => 'A1']), $secret);
+$secondId = lf_host_enter($pdo, $second)[1];
+check('another person of the same account joins that account', $secondId !== null && (int) one($pdo, "SELECT COUNT(*) FROM accounts WHERE host_ref = 'A1'") === 1
+    && one($pdo, "SELECT account_id FROM members WHERE id = $secondId") === one($pdo, "SELECT account_id FROM members WHERE id = $hostMemberId"));
+$pdo->exec("UPDATE accounts SET member_limit = 2 WHERE host_ref = 'A1'");
+[$third] = lf_host_token_verify($make(['ref' => 'r3', 'acct' => 'A1']), $secret);
+check('an account with no free places refuses a third person, and the link is not used up', lf_host_enter($pdo, $third)[0] === 'This account has no free places left.'
+    && (int) one($pdo, "SELECT COUNT(*) FROM host_tokens WHERE jti = '{$third['jti']}'") === 0);
+$pdo->exec("UPDATE accounts SET member_limit = 5 WHERE host_ref = 'A1'");
+check('and works once there is room', lf_host_enter($pdo, $third)[0] === null);
+lf_member_remove($pdo, $boss, (int) $secondId);
+[$back] = lf_host_token_verify($make(['ref' => 'r2', 'acct' => 'A1']), $secret);
+check('somebody the owner removed can’t be brought back by the host', lf_host_enter($pdo, $back)[0] === 'This forum isn’t available for your account.' && (int) one($pdo, "SELECT COUNT(*) FROM members WHERE host_ref = 'r2'") === 1);
+$withPassword = lf_member_create($pdo, 1, 'HostPw', password_hash('password-for-tests', PASSWORD_BCRYPT, ['cost' => 4]), 'member', 'r-pw');
+check('a host’s member can’t log in on the forum’s own page, even with a password', lf_login($pdo, 'hostpw', 'password-for-tests', '203.0.113.60')[0] === 'That username and password don’t match.');
+lf_member_set_username($pdo, $hostMemberId, 'Hosted');
+check('nor one who chose a name and never had a password', lf_login($pdo, 'hosted', '', '203.0.113.60')[0] !== null && lf_login($pdo, 'hosted', 'anything at all', '203.0.113.60')[0] !== null);
+
+cfg(['host' => ['idle_minutes' => 30, 'max_hours' => 2]]);
+$hostToken = lf_session_start($pdo, $hostMemberId, true);
+$hostSession = lf_session_lookup($pdo, $hostToken);
+check('a login through a host is marked, and works', $hostSession !== null && (int) $hostSession['via_host'] === 1 && $hostSession['host_ref'] === 'r1');
+$pdo->prepare("UPDATE sessions SET last_used_at = :t WHERE token_hash = :h")->execute(['t' => ago(31 * 60), 'h' => lf_token_hash($hostToken)]);
+check('it ends after the host’s idle time, though an ordinary login would go on', lf_session_lookup($pdo, $hostToken) === null && lf_session_lookup($pdo, (string) lf_session_start($pdo, (int) $alice['id'])) !== null);
+$hostToken = lf_session_start($pdo, $hostMemberId, true);
+$pdo->prepare("UPDATE sessions SET created_at = :t WHERE token_hash = :h")->execute(['t' => ago(3 * 3600), 'h' => lf_token_hash($hostToken)]);
+check('and after the longest total time, however busy', lf_session_lookup($pdo, $hostToken) === null);
+$oldHost = lf_session_start($pdo, $hostMemberId, true);
+$pdo->prepare("UPDATE sessions SET last_used_at = :t WHERE token_hash = :h")->execute(['t' => ago(40 * 60), 'h' => lf_token_hash($oldHost)]);
+$freshHost = lf_session_start($pdo, $hostMemberId, true);
+$pdo->prepare("INSERT INTO host_tokens (jti, expires_at) VALUES ('" . str_repeat('a', 32) . "', :t)")->execute(['t' => ago(60)]);
+lf_maintain($pdo);
+check('housekeeping forgets old host logins and used links', lf_session_lookup($pdo, $freshHost) !== null && (int) one($pdo, "SELECT COUNT(*) FROM sessions WHERE token_hash = " . "UNHEX('" . bin2hex(lf_token_hash($oldHost)) . "')") === 0
+    && (int) one($pdo, "SELECT COUNT(*) FROM host_tokens WHERE jti = '" . str_repeat('a', 32) . "'") === 0);
+cfg(['host' => ['frame_ancestors' => ['https://libre.wtf', 'http://localhost:8080', 'javascript:alert(1)', 'https://bad host', 'https://a.example/path']]]);
+check('only real origins may show the forum in a frame', lf_frame_ancestors() === ['https://libre.wtf', 'http://localhost:8080']);
+cfg([]);
+check('by default nobody may', lf_frame_ancestors() === []);
+check('a page in a frame is known by the browser’s own header', lf_is_embedded(['HTTP_SEC_FETCH_DEST' => 'iframe']) && !lf_is_embedded(['HTTP_SEC_FETCH_DEST' => 'document']) && !lf_is_embedded([]));
+
+echo "Bringing an older database up to date\n";
+$pdo->exec("ALTER TABLE sessions DROP COLUMN via_host");
+$pdo->exec("ALTER TABLE accounts DROP INDEX uq_accounts_host");
+$pdo->exec("ALTER TABLE accounts DROP COLUMN host_ref");
+$changes = lf_install_schema($pdo);
+check('missing columns and keys are added', count($changes) === 3 && lf_column_exists($pdo, 'sessions', 'via_host') && lf_column_exists($pdo, 'accounts', 'host_ref') && lf_index_exists($pdo, 'accounts', 'uq_accounts_host'));
+check('and doing it again changes nothing', lf_install_schema($pdo) === []);
+
+echo "An owner who only comes in through another app\n";
+$pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+foreach ($pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN) as $table) {
+    $pdo->exec("DROP TABLE `$table`");
+}
+$pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+lf_install_schema($pdo);
+check('the host’s id for the owner has to look like one', lf_setup_owner($pdo, 'Host Forum', 'ranzy', '', '', 'bad id!')[0] === 'That host id isn’t valid.' && !lf_owner_exists($pdo));
+[$problem, $hostOwnerId] = lf_setup_owner($pdo, 'Host Forum', 'ranzy', '', '', '2');
+$hostOwner = lf_member_get($pdo, (int) $hostOwnerId);
+check('the owner is made with no password, tied to the host’s id for them', $problem === null && $hostOwner['role'] === 'owner' && $hostOwner['host_ref'] === '2' && one($pdo, "SELECT password_hash FROM members WHERE id = $hostOwnerId") === null
+    && (int) one($pdo, "SELECT COUNT(*) FROM categories") === 3 && lf_forum_name($pdo) === 'Host Forum');
+check('so nobody can log in as them on the forum’s own page, whatever is typed', lf_login($pdo, 'ranzy', '', '203.0.113.61')[0] === 'That username and password don’t match.'
+    && lf_login($pdo, 'ranzy', 'a long enough password', '203.0.113.61')[0] !== null && lf_login($pdo, 'Ranzy', str_repeat('x', 72), '203.0.113.61')[0] !== null && (int) one($pdo, "SELECT COUNT(*) FROM sessions") === 0);
+check('their own way in is the host’s link, and setup is closed for good', lf_host_enter($pdo, lf_host_token_verify($make(['ref' => '2', 'acct' => '2']), $secret)[0])[1] === $hostOwnerId
+    && lf_owner_exists($pdo) && lf_setup_owner($pdo, 'Again', 'someone', '', '', '3')[0] === 'This forum has already been set up.');
 
 echo "\n", $passed, ' passed, ', $failed, " failed\n";
 exit($failed ? 1 : 0);

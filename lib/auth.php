@@ -30,13 +30,14 @@ function lf_token_hash(string $token): string
     return hash('sha256', $token, true);
 }
 
-// Logs a member in. Returns the token for their cookie.
-function lf_session_start(PDO $pdo, int $memberId): string
+// Logs a member in. Returns the token for their cookie. $viaHost marks a login that came through a host
+// app: those end sooner (host.idle_minutes, host.max_hours in config.php).
+function lf_session_start(PDO $pdo, int $memberId, bool $viaHost = false): string
 {
     $token = bin2hex(random_bytes(32));
     $now = lf_now();
-    $pdo->prepare("INSERT INTO sessions (token_hash, member_id, csrf, created_at, last_used_at) VALUES (:t, :m, :c, :n1, :n2)")
-        ->execute(['t' => lf_token_hash($token), 'm' => $memberId, 'c' => bin2hex(random_bytes(16)), 'n1' => $now, 'n2' => $now]);
+    $pdo->prepare("INSERT INTO sessions (token_hash, member_id, csrf, via_host, created_at, last_used_at) VALUES (:t, :m, :c, :v, :n1, :n2)")
+        ->execute(['t' => lf_token_hash($token), 'm' => $memberId, 'c' => bin2hex(random_bytes(16)), 'v' => (int) $viaHost, 'n1' => $now, 'n2' => $now]);
     $pdo->prepare("UPDATE members SET last_seen_at = :n WHERE id = :m")->execute(['n' => $now, 'm' => $memberId]);
     return $token;
 }
@@ -50,7 +51,7 @@ function lf_session_lookup(PDO $pdo, string $token): ?array
     }
     $stmt = $pdo->prepare(
         "SELECT m.id, m.account_id, m.username, m.role, m.status, m.host_ref, m.created_at, m.last_seen_at,
-                s.csrf, s.flash, s.last_used_at AS session_used, HEX(s.token_hash) AS session_key
+                s.csrf, s.flash, s.via_host, s.created_at AS session_created, s.last_used_at AS session_used, HEX(s.token_hash) AS session_key
          FROM sessions s JOIN members m ON m.id = s.member_id
          WHERE s.token_hash = :t AND m.status <> 'removed'"
     );
@@ -59,17 +60,21 @@ function lf_session_lookup(PDO $pdo, string $token): ?array
     if (!$member) {
         return null;
     }
+    $viaHost = (int) $member['via_host'] === 1;
     $idle = time() - strtotime($member['session_used'] . ' UTC');
-    if ($idle > (int) lf_cfg('session_days', 30) * 86400) {
+    $age = time() - strtotime($member['session_created'] . ' UTC');
+    // A login through a host app follows the host's own limits: a short idle time and a longest total time.
+    $idleLimit = $viaHost ? (int) lf_cfg('host.idle_minutes', 60) * 60 : (int) lf_cfg('session_days', 30) * 86400;
+    if ($idle > $idleLimit || ($viaHost && $age > (int) lf_cfg('host.max_hours', 12) * 3600)) {
         lf_session_end($pdo, $token);
         return null;
     }
-    if ($idle > 600) {   // stays logged in while in use, without a write on every page
+    if ($idle > ($viaHost ? 120 : 600)) {   // stays logged in while in use, without a write on every page
         $now = lf_now();
         $pdo->prepare("UPDATE sessions SET last_used_at = :n WHERE token_hash = :t")->execute(['n' => $now, 't' => lf_token_hash($token)]);
         $pdo->prepare("UPDATE members SET last_seen_at = :n WHERE id = :m")->execute(['n' => $now, 'm' => $member['id']]);
     }
-    unset($member['session_used']);
+    unset($member['session_used'], $member['session_created']);
     return $member;
 }
 
@@ -106,13 +111,14 @@ function lf_login(PDO $pdo, string $username, string $password, string $ip): arr
     if ((int) $stmt->fetchColumn() >= LF_LOGIN_TRIES) {
         return ['Too many wrong passwords. Please wait 15 minutes and try again.', null];
     }
-    $stmt = $pdo->prepare("SELECT id, password_hash, status FROM members WHERE username_key = :k");
+    $stmt = $pdo->prepare("SELECT id, password_hash, status, host_ref FROM members WHERE username_key = :k");
     $stmt->execute(['k' => lf_username_key(trim($username))]);
     $member = $stmt->fetch();
     $hash = $member['password_hash'] ?? null;
     // Always check a hash, so a wrong username takes as long as a wrong password.
     $ok = password_verify($password, $hash ?? lf_dummy_hash($pdo));
-    if (!$member || !$ok || $hash === null || $member['status'] === 'removed') {
+    // People who come in through a host app can't log in here at all, whatever password they type.
+    if (!$member || !$ok || $hash === null || $member['status'] === 'removed' || $member['host_ref'] !== null) {
         $pdo->prepare("INSERT INTO login_failures (who, at) VALUES (:w, :t)")->execute(['w' => $who, 't' => lf_now()]);
         return ['That username and password don’t match.', null];
     }

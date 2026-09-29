@@ -48,6 +48,7 @@ function lf_show(array $req, string $template, array $vars = [], int $status = 2
         'flash' => $me !== null ? lf_flash_take($pdo, $me) : null,
         'sourceUrl' => (string) lf_cfg('source_url', 'https://github.com/rjc3rd/LibreForum'),
         'version' => LF_VERSION,
+        'embedded' => lf_is_embedded(),
         'title' => $forum,
     ], $status);
 }
@@ -135,6 +136,7 @@ function lf_routes(): array
         ['POST', '~^/manage/categories$~D', 'lf_pg_category_add'],
         ['POST', '~^/manage/categories/(\d{1,10})/(save|up|down|delete)$~D', 'lf_pg_category_action'],
         ['POST', '~^/manage/forum$~D', 'lf_pg_forum_save'],
+        ['GET', '~^/enter$~D', 'lf_pg_enter'],
         ['GET', '~^/login$~D', 'lf_pg_login'],
         ['POST', '~^/login$~D', 'lf_pg_login_submit'],
         ['POST', '~^/logout$~D', 'lf_pg_logout'],
@@ -502,7 +504,8 @@ function lf_pg_forum_save(array $req): void
         : (mb_strlen($rules) > 2000 ? 'The rules are too long (2,000 characters at most).' : null);
     if ($problem === null) {
         lf_setting_set($req['pdo'], 'forum_name', $name);
-        lf_setting_set($req['pdo'], 'rules', $rules === '' ? LF_DEFAULT_RULES : $rules);
+        // An empty box means "use the default rules again" (the theme's, or the built-in ones).
+        $rules === '' ? lf_setting_delete($req['pdo'], 'rules') : lf_setting_set($req['pdo'], 'rules', $rules);
     }
     lf_finish($req, $problem, 'Saved.', 'manage/forum');
 }
@@ -549,6 +552,32 @@ function lf_pg_logout(array $req): void
         lf_cookie_clear();
     }
     lf_redirect('login');
+}
+
+// The way in for people whose host app runs the forum: a signed, single-use link (see lib/host.php).
+function lf_pg_enter(array $req): void
+{
+    $secret = (string) lf_cfg('host.secret', '');
+    if ($secret === '') {
+        lf_error($req, 404);
+        return;
+    }
+    [$claims, $why] = lf_host_token_verify(lf_in($req['get'], 't'), $secret);
+    if ($claims === null) {
+        error_log("LibreForum: an entry link was refused ($why)");
+        lf_error($req, 410, 'This link has expired or was already used. Please open the forum again from your account.');
+        return;
+    }
+    [$problem, $memberId] = lf_host_enter($req['pdo'], $claims);
+    if ($problem !== null) {
+        lf_error($req, $problem === LF_HOST_LINK_USED ? 410 : 403, $problem);
+        return;
+    }
+    if ($req['token'] !== '') {
+        lf_session_end($req['pdo'], $req['token']);   // whatever login this browser had before
+    }
+    lf_cookie_set(lf_session_start($req['pdo'], (int) $memberId, true), true);
+    lf_redirect(ltrim((string) ($claims['next'] ?? ''), '/'));
 }
 
 // Where somebody who follows an invitation link chooses their username and password.

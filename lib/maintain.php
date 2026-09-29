@@ -18,6 +18,13 @@ function lf_maintain(PDO $pdo): array
     $stmt->execute(['t' => $cut((int) lf_cfg('session_days', 30))]);
     $log[] = $stmt->rowCount() . ' expired logins removed';
 
+    $stmt = $pdo->prepare("DELETE FROM sessions WHERE via_host = 1 AND (last_used_at < :i OR created_at < :m)");
+    $stmt->execute(['i' => gmdate('Y-m-d H:i:s', time() - (int) lf_cfg('host.idle_minutes', 60) * 60), 'm' => gmdate('Y-m-d H:i:s', time() - (int) lf_cfg('host.max_hours', 12) * 3600)]);
+    $log[] = $stmt->rowCount() . ' expired host logins removed';
+    $stmt = $pdo->prepare("DELETE FROM host_tokens WHERE expires_at < :t");
+    $stmt->execute(['t' => lf_now()]);
+    $log[] = $stmt->rowCount() . ' used entry links forgotten';
+
     $log[] = lf_salt_prune($pdo) . ' old daily secrets removed';
     $stmt = $pdo->prepare("DELETE FROM login_failures WHERE at < :t");
     $stmt->execute(['t' => $cut(1)]);

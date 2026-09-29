@@ -6,8 +6,10 @@ CREATE TABLE IF NOT EXISTS accounts (
   id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
   name          VARCHAR(100) NOT NULL,
   member_limit  SMALLINT UNSIGNED NULL,               -- most people this account may have, NULL for no limit
+  host_ref      VARCHAR(100) NULL,                    -- the host app's own id for this account, if any
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id)
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_accounts_host (host_ref)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS members (
@@ -119,6 +121,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   token_hash    BINARY(32) NOT NULL,
   member_id     INT UNSIGNED NOT NULL,
   csrf          CHAR(32) NOT NULL,
+  via_host      TINYINT(1) NOT NULL DEFAULT 0,         -- 1 when the login came through a host app, which sets shorter limits
   flash         VARCHAR(400) NULL,                     -- a message to show once on the next page
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_used_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -126,6 +129,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   KEY idx_sessions_member (member_id),
   KEY idx_sessions_used (last_used_at),
   CONSTRAINT fk_sessions_member FOREIGN KEY (member_id) REFERENCES members (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Entry links from a host app can be used once. Their ids are kept until they would have expired anyway.
+CREATE TABLE IF NOT EXISTS host_tokens (
+  jti         CHAR(32) NOT NULL,
+  expires_at  DATETIME NOT NULL,
+  PRIMARY KEY (jti),
+  KEY idx_host_tokens_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS settings (

@@ -80,6 +80,11 @@ function lf_setting_set(PDO $pdo, string $name, string $value): void
         ->execute(['n' => $name, 'v' => $value]);
 }
 
+function lf_setting_delete(PDO $pdo, string $name): void
+{
+    $pdo->prepare("DELETE FROM settings WHERE name = :n")->execute(['n' => $name]);
+}
+
 function lf_forum_name(PDO $pdo): string
 {
     $name = trim((string) lf_setting($pdo, 'forum_name', ''));
@@ -88,8 +93,3 @@ function lf_forum_name(PDO $pdo): string
 
 // The default house rules, until the owner writes their own.
 const LF_DEFAULT_RULES = "Be kind and stay on topic.\nNever post passwords or other private details.\nAccount and billing questions go to email, not here.";
-
-function lf_rules(PDO $pdo): string
-{
-    return (string) lf_setting($pdo, 'rules', LF_DEFAULT_RULES);
-}

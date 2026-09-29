@@ -10,6 +10,7 @@ if (PHP_SAPI !== 'cli') {
 }
 require_once __DIR__ . '/../lib/bootstrap.php';
 require_once __DIR__ . '/../lib/setup.php';
+require_once __DIR__ . '/../lib/host.php';
 
 if (!is_file(__DIR__ . '/config.php')) {
     exit("tests/config.php is missing. Copy tests/config.example.php and fill it in.\n");
@@ -68,7 +69,7 @@ $passwordTwice = "correct horse battery\ncorrect horse battery\n";
 
 echo "Command-line tools\n";
 [$code, $out] = cli('install');
-check('install creates the tables', $code === 0 && str_contains($out, 'Tables ready') && (int) one($pdo, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()") === 12);
+check('install creates the tables', $code === 0 && str_contains($out, 'Tables ready') && (int) one($pdo, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()") === 13);
 check('tools that act for the owner say when there is none', str_contains(cli('invite')[1], 'There is no owner yet') && str_contains(cli('category', ['list'])[1], 'There is no owner yet') && str_contains(cli('member', ['list'])[1], 'There is no owner yet'));
 check('owner explains how to use it', str_contains(cli('owner', ['cliboss'])[1], 'Usage'));
 check('a bad password stops it', cli('owner', ['cliboss', 'CLI Forum'], "short\nshort\n")[0] === 1 && (int) one($pdo, "SELECT COUNT(*) FROM members") === 0);
@@ -102,6 +103,15 @@ check('the owner can’t be removed from here either', cli('member', ['remove', 
 
 check('maintain says what it did, or nothing with --quiet', str_contains(cli('maintain')[1], 'expired logins removed') && cli('maintain', ['--quiet'])[1] === '');
 
+$wipe();
+cli('install');
+[$code, $out] = cli('owner', ['ranzy', 'Host Forum', '--host-ref=2']);
+check('an owner for a forum run inside another app is made with no password', $code === 0 && str_contains($out, 'no password') && one($pdo, "SELECT password_hash FROM members WHERE username = 'ranzy'") === null
+    && one($pdo, "SELECT host_ref FROM members WHERE username = 'ranzy'") === '2' && one($pdo, "SELECT role FROM members WHERE username = 'ranzy'") === 'owner' && (int) one($pdo, "SELECT COUNT(*) FROM categories") === 3);
+check('that works once', cli('owner', ['other', 'Second', '--host-ref=3'])[0] === 1 && str_contains(cli('owner', ['other', 'Second', '--host-ref=3'])[1], 'already been set up'));
+$wipe();
+cli('install');
+check('a bad host id is refused', str_contains(cli('owner', ['ranzy', 'Host Forum', '--host-ref=bad id!'])[1], 'That host id isn’t valid.') && (int) one($pdo, "SELECT COUNT(*) FROM members") === 0);
 $wipe();
 cli('install');
 [$code, $out] = cli('demo');
@@ -364,6 +374,35 @@ for ($i = 0; $i < 8; $i++) {
 check('repeated wrong passwords lock the address out for a while', has($owner->post('/login', ['username' => 'boss', 'password' => 'correct horse battery'], $origin), 'Too many wrong passwords'));
 $pdo->exec('DELETE FROM login_failures');
 check('the right password logs in again', to($owner->post('/login', ['username' => 'boss', 'password' => 'correct horse battery'], $origin), '/'));
+
+echo "Coming in through a host app\n";
+$hostSecret = 'e2e-host-secret-0123456789abcdef0123456789abcdef';
+$hostUser = new Browser($base);
+$entry = '/enter?t=' . lf_host_token_make(['ref' => 'e2e-1', 'acct' => 'e2e-A', 'acct_name' => 'E2E Co'], $hostSecret);
+$res = $hostUser->get($entry);
+check('an entry link starts a login that ends when the browser closes', to($res, '/') && preg_match('~^set-cookie: libreforum=[0-9a-f]{64}; path=/; HttpOnly; SameSite=Lax\s*$~im', $res['head']) === 1
+    && !str_contains(strtolower($res['head']), 'expires=') && !str_contains(strtolower($res['head']), 'max-age='));
+$res = $hostUser->get('/');
+check('a member with no name yet is asked to choose one, with no password box', to($res, '/welcome') && ($welcome = $hostUser->get('/welcome')) && $welcome['status'] === 200 && has($welcome, 'name="username"') && !has($welcome, 'name="password"'));
+$res = $hostUser->post('/welcome', ['csrf' => csrf($welcome), 'username' => 'HostMaya'], $origin);
+check('and then they are in', to($res, '/') && flash($hostUser->follow($res)) === 'ok: Welcome, HostMaya!');
+$res = $hostUser->get('/settings');
+check('their settings say there is no password to change', has($res, 'You come in through another app') && !has($res, 'name="current"'));
+$res = $guest->get($entry);
+check('the same link does not work twice', $res['status'] === 410 && has($res, 'already used') && !isset($res['headers']['set-cookie']));
+$res = $guest->get('/enter?t=' . substr($entry, strlen('/enter?t='), -3) . 'abc');
+check('a forged link does not work at all, and neither does no link', $res['status'] === 410 && !isset($res['headers']['set-cookie']) && $guest->get('/enter')['status'] === 410);
+$res = (new Browser($base))->post('/login', ['username' => 'hostmaya', 'password' => 'anything at all'], $origin);
+check('they can’t log in on the forum’s own page', $res['status'] === 200 && has($res, 'That username and password don’t match.'));
+$res = $hostUser->get('/', ['Sec-Fetch-Dest: iframe']);
+check('a page shown inside a frame says so', has($res, '<body class="lf-embedded">') && !has($hostUser->get('/'), 'lf-embedded'));
+$res = $guest->get('/login', ['X-Test-Frames: 1']);
+check('frames are allowed only for the host’s own pages', str_contains($res['headers']['content-security-policy'], "frame-ancestors 'self' https://host.example") && !isset($res['headers']['x-frame-options'])
+    && str_contains($guest->get('/login')['headers']['content-security-policy'], "frame-ancestors 'none'") && $guest->get('/login')['headers']['x-frame-options'] === 'DENY');
+$res = $hostUser->post('/logout', ['csrf' => csrf($hostUser->get('/'))], $origin);
+check('logging out works', to($res, '/login') && to($hostUser->get('/'), '/login'));
+check('the second entry for the same person is the same member', to($hostUser->get('/enter?t=' . lf_host_token_make(['ref' => 'e2e-1', 'acct' => 'e2e-A'], $hostSecret)), '/') && (int) one($pdo, "SELECT COUNT(*) FROM members WHERE host_ref = 'e2e-1'") === 1
+    && $hostUser->get('/')['status'] === 200);
 
 echo "Odds and ends\n";
 check('unknown pages are not found', $owner->get('/nope')['status'] === 404 && $owner->get('/t/9999')['status'] === 404 && $owner->get('/t/abc')['status'] === 404 && $owner->get('/c/nope')['status'] === 404 && $owner->get('/logout')['status'] === 404);

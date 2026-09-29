@@ -69,6 +69,19 @@ function lf_page(string $template, array $vars = [], int $status = 200): void
     lf_render('layout', $vars + ['content' => $content]);
 }
 
+// The house rules: what the owner wrote in Manage > Forum, or else the theme's own default (a theme can ship
+// its wording in templates/default-rules.txt, one rule per line), or else the built-in rules.
+function lf_rules(PDO $pdo): string
+{
+    $written = trim((string) lf_setting($pdo, 'rules', ''));
+    if ($written !== '') {
+        return $written;
+    }
+    $file = lf_theme_file('templates', 'default-rules.txt');
+    $themed = $file !== null ? trim((string) file_get_contents($file)) : '';
+    return $themed !== '' ? $themed : LF_DEFAULT_RULES;
+}
+
 // Address of a theme asset, with a version so browsers pick up changes.
 function lf_asset(string $file): string
 {

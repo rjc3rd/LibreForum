@@ -49,6 +49,27 @@ function lf_account_create(PDO $pdo, string $name, ?int $memberLimit = null): in
     return (int) $pdo->lastInsertId();
 }
 
+// The forum account for a host app's account id (made the first time), so the people of one account belong together.
+function lf_account_for_host(PDO $pdo, string $hostAccount, string $name): int
+{
+    $find = $pdo->prepare("SELECT id FROM accounts WHERE host_ref = :h");
+    $find->execute(['h' => $hostAccount]);
+    if (($id = $find->fetchColumn()) !== false) {
+        return (int) $id;
+    }
+    try {
+        $pdo->prepare("INSERT INTO accounts (name, host_ref, created_at) VALUES (:n, :h, :t)")
+            ->execute(['n' => $name !== '' ? mb_substr($name, 0, 100) : 'Account ' . $hostAccount, 'h' => $hostAccount, 't' => lf_now()]);
+        return (int) $pdo->lastInsertId();
+    } catch (PDOException $e) {
+        if (!lf_is_duplicate($e)) {
+            throw $e;
+        }
+        $find->execute(['h' => $hostAccount]);   // someone else made it a moment ago
+        return (int) $find->fetchColumn();
+    }
+}
+
 // How many people an account has and how many it may have (null: no limit).
 function lf_account_seats(PDO $pdo, int $accountId): array
 {
@@ -181,10 +202,11 @@ function lf_member_remove(PDO $pdo, array $me, int $targetId): ?string
     return null;
 }
 
-// Turns a member into a "Former member": no name, no password, no logins, no reading history.
+// Turns a member into a "Former member": no name, no password, no logins, no reading history. Their host
+// id stays (that is what stops the host app from bringing them straight back in).
 function lf_member_wipe(PDO $pdo, int $memberId): void
 {
-    $pdo->prepare("UPDATE members SET status = 'removed', role = 'member', username = NULL, username_key = NULL, password_hash = NULL, host_ref = NULL WHERE id = :m")->execute(['m' => $memberId]);
+    $pdo->prepare("UPDATE members SET status = 'removed', role = 'member', username = NULL, username_key = NULL, password_hash = NULL WHERE id = :m")->execute(['m' => $memberId]);
     $pdo->prepare("DELETE FROM sessions WHERE member_id = :m")->execute(['m' => $memberId]);
     $pdo->prepare("DELETE FROM thread_reads WHERE member_id = :m")->execute(['m' => $memberId]);
 }

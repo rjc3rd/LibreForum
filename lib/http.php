@@ -51,11 +51,12 @@ function lf_is_https(?array $server = null): bool
         && strtolower((string) ($server['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
 }
 
-function lf_cookie_set(string $token): void
+// A login through a host app is a browser-session cookie (gone when the browser closes).
+function lf_cookie_set(string $token, bool $viaHost = false): void
 {
     $base = lf_base();
     setcookie(LF_COOKIE, $token, [
-        'expires' => time() + (int) lf_cfg('session_days', 30) * 86400,
+        'expires' => $viaHost ? 0 : time() + (int) lf_cfg('session_days', 30) * 86400,
         'path' => $base === '' ? '/' : $base,
         'secure' => lf_is_https(),
         'httponly' => true,
@@ -87,12 +88,29 @@ function lf_origin_ok(array $server): bool
     return $site === null || $site === 'same-origin' || $site === 'none';
 }
 
+// The pages allowed to show the forum inside a frame (host.frame_ancestors in config.php). Normally none.
+function lf_frame_ancestors(): array
+{
+    return array_values(array_filter((array) lf_cfg('host.frame_ancestors', []),
+        fn ($origin) => is_string($origin) && preg_match('~^https?://[A-Za-z0-9.-]+(:\d{1,5})?$~D', $origin) === 1));
+}
+
+// True when the page is being shown inside a frame (browsers say so in Sec-Fetch-Dest).
+function lf_is_embedded(?array $server = null): bool
+{
+    $server ??= $_SERVER;
+    return strtolower((string) ($server['HTTP_SEC_FETCH_DEST'] ?? '')) === 'iframe';
+}
+
 // Headers for every page: nothing from outside is ever loaded, nothing is cached, nothing is indexed.
 function lf_send_headers(): void
 {
-    header("Content-Security-Policy: default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    $ancestors = lf_frame_ancestors();
+    header("Content-Security-Policy: default-src 'self'; img-src 'self' data:; frame-ancestors " . ($ancestors ? "'self' " . implode(' ', $ancestors) : "'none'") . "; base-uri 'self'; form-action 'self'");
     header('X-Content-Type-Options: nosniff');
-    header('X-Frame-Options: DENY');
+    if (!$ancestors) {
+        header('X-Frame-Options: DENY');
+    }
     // Other websites never learn where a visitor came from. Same-site forms still say who sent them.
     header('Referrer-Policy: same-origin');
     header('X-Robots-Tag: noindex, nofollow');

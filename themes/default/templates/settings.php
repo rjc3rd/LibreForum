@@ -8,6 +8,12 @@
     <dt>Joined</dt><dd><time datetime="<?= h(lf_iso($me['created_at'])) ?>"><?= h(gmdate('M j, Y', strtotime($me['created_at'] . ' UTC'))) ?></time></dd>
   </dl>
 </section>
+<?php if ($me['host_ref'] !== null): ?>
+<section class="lf-card">
+  <h2>Your password</h2>
+  <p>You come in through another app, so there is no password here. Sign in there to reach the forum.</p>
+</section>
+<?php else: ?>
 <section class="lf-card">
   <h2>Change your password</h2>
   <?php if ($error): ?><p class="lf-error" role="alert"><?= h($error) ?></p><?php endif; ?>
@@ -18,3 +24,4 @@
     <div><button class="lf-btn lf-btn-primary" type="submit">Change password</button></div>
   </form>
 </section>
+<?php endif; ?>

@@ -10,5 +10,7 @@ if (PHP_SAPI !== 'cli') {
 require __DIR__ . '/../lib/bootstrap.php';
 require __DIR__ . '/../lib/setup.php';
 
-lf_install_schema(lf_db());
+foreach (lf_install_schema(lf_db()) as $change) {
+    echo "Updated: $change\n";
+}
 echo "Tables ready. Next, open the forum in your browser to set it up, or run:\n  php bin/owner.php yourname \"Forum name\"\n";

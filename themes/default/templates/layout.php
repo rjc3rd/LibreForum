@@ -11,7 +11,7 @@
 <?php if (lf_theme_file('assets', 'custom.css', true)): ?><link rel="stylesheet" href="<?= h(lf_asset('custom.css')) ?>"><?php endif; ?>
 <link rel="icon" href="<?= h(lf_asset('icon.svg')) ?>" type="image/svg+xml">
 </head>
-<body>
+<body<?= !empty($embedded) ? ' class="lf-embedded"' : '' ?>>
 <a class="lf-skip" href="#main">Skip to the content</a>
 <?php if ($me !== null && empty($bare)) { lf_render('bar', get_defined_vars()); } ?>
 <main class="lf-main<?= !empty($bare) ? ' lf-main-bare' : '' ?>" id="main">

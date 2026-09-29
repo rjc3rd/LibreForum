@@ -17,6 +17,9 @@ lf_config([
     'limits' => ['posts_per_hour' => 1000, 'threads_per_day' => 1000, 'seconds_between_posts' => 0],
     'session_days' => 30, 'trusted_proxies' => [], 'theme' => 'default', 'theme_paths' => [],
     'threads_per_page' => 3, 'posts_per_page' => 3,
+    // A pretend host app. A request with the X-Test-Frames header also lets its pages show the forum in a frame.
+    'host' => ['secret' => 'e2e-host-secret-0123456789abcdef0123456789abcdef', 'idle_minutes' => 60, 'max_hours' => 12,
+        'frame_ancestors' => isset($_SERVER['HTTP_X_TEST_FRAMES']) ? ['https://host.example'] : []],
 ]);
 
 $path = (string) parse_url((string) $_SERVER['REQUEST_URI'], PHP_URL_PATH);

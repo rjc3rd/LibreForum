@@ -64,7 +64,7 @@ Want to see it with some conversations in it first? `php bin/demo.php` fills an 
 | Command | What it does |
 | --- | --- |
 | `php bin/install.php` | Creates the tables. Safe to run again. |
-| `php bin/owner.php name "Forum name"` | Creates the owner, instead of the setup page. |
+| `php bin/owner.php name "Forum name" [--host-ref=ID]` | Creates the owner, instead of the setup page. With `--host-ref` the owner has no password (see "Running it inside another app"). |
 | `php bin/invite.php [member\|moderator] [days]` | Prints an invitation link. |
 | `php bin/category.php list \| add \| rename \| staff-only \| up \| down \| delete` | Manages categories. |
 | `php bin/member.php list \| mute \| unmute \| moderator \| member \| remove \| password` | Manages people. `password` sets a new password for someone who lost theirs. |
@@ -85,12 +85,32 @@ Want to see it with some conversations in it first? `php bin/demo.php` fills an 
 
 Settings can also be given from a different file with the `LIBREFORUM_CONFIG` environment variable, which is handy in containers.
 
+## Running it inside another app
+
+A control panel, a customer area or any app that already logs its own people in can run the forum for them, so nobody needs a second password.
+
+1. Put a long random secret in `config.php` and give the same secret to the host app:
+
+   ```php
+   'host' => [
+       'secret' => 'a long random text',
+       'frame_ancestors' => ['https://host.example'],   // pages that may show the forum inside a frame (optional)
+       'idle_minutes' => 60,                            // how long such a login lasts when unused
+       'max_hours' => 12,                               // and in total
+   ],
+   ```
+2. Create the owner with no password: `php bin/owner.php name "Forum name" --host-ref=ID`, where ID is the host app's own id for that person.
+3. When one of its people wants the forum, the host app sends their browser to `https://forum.example/enter?t=TOKEN`, or shows that address in a frame. A token is `base64url(payload) + "." + base64url(HMAC-SHA256(payload text, secret))`, and the payload is JSON: `v` (1), `ref` (the host's id for the person), `acct` (its id for their account), `acct_name` (optional), `iat` and `exp` (Unix times, at most 5 minutes apart: a minute is plenty), `jti` (32 random hex characters) and `next` (an optional first page such as `/t/12`). Each link works once. `lib/host.php` has `lf_host_token_make()`, which a PHP host can copy.
+
+People who come in this way have no password on the forum and can't use its own login page at all. Their login ends when the browser closes, after `idle_minutes` without use, or after `max_hours`. The first time, they choose a username on the welcome screen. People with the same `acct` belong to one forum account, so a member limit can be set for it. Other people (a team, say) can still get in the ordinary way with an invitation link and a password. When the owner removes someone, the host can't bring them back.
+
 ## Themes
 
 LibreForum ships with a clean default theme. Every color, font and size is a token at the top of `themes/default/assets/theme.css`, so you can make it match your own site without touching the code.
 
 - **Small changes:** make a folder `themes/mine/assets/` with a `custom.css` that overrides the tokens, and set `'theme' => 'mine'` in `config.php`.
 - **Bigger changes:** copy any page from `themes/default/templates/` into your theme and edit it. Anything a theme doesn't have comes from the default theme.
+- A theme can bring its own default house rules: put them, one per line, in `templates/default-rules.txt`. They stand until the owner writes rules in the browser.
 - Themes can live outside the code folder: put `'theme_paths' => ['/path/to/my/themes']` in `config.php`.
 
 ## Checks
