@@ -466,6 +466,33 @@ check('another account can’t set it', host_api($base, ['op' => 'team.password'
 check('and removing them ends it', host_api($base, ['op' => 'team.remove', 'acct' => 'e2e-A', 'member' => $ninaId])['status'] === 200 && host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A'])['json']['members'] === []);
 check('GET is not the way to talk to it', $guest->get('/host/api')['status'] === 404);
 
+echo "Pausing an account, over HTTP\n";
+$res = host_api($base, ['op' => 'team.create', 'acct' => 'e2e-A', 'username' => 'E2EQuin', 'password' => 'e2e quin password']);
+$quin = new Browser($base);
+check('a team member is in and busy', $res['status'] === 200 && to($quin->post('/login', ['username' => 'e2equin', 'password' => 'e2e quin password'], $origin), '/') && $quin->get('/')['status'] === 200);
+$holderBrowser = new Browser($base);
+$holderBrowser->get('/enter?t=' . lf_host_token_make(['ref' => 'e2e-1', 'acct' => 'e2e-A'], $hostSecret));
+check('and so is the account holder, through the host', $holderBrowser->get('/')['status'] === 200);
+$res = host_api($base, ['op' => 'acct.suspend', 'acct' => 'e2e-A']);
+check('the host pauses the account', $res['status'] === 200 && $res['json'] === ['ok' => true]);
+check('open logins stop working at the next click: back to the login page', to($quin->get('/'), '/login') && to($holderBrowser->get('/'), '/login'));
+$res = (new Browser($base))->post('/login', ['username' => 'e2equin', 'password' => 'e2e quin password'], $origin);
+check('logging in says the account is paused, to somebody with the right password', $res['status'] === 200 && has($res, 'This account is paused.') && !isset($res['headers']['set-cookie']));
+$res = (new Browser($base))->post('/login', ['username' => 'e2equin', 'password' => 'a wrong password'], $origin);
+check('and gives a stranger nothing: the usual message', $res['status'] === 200 && has($res, 'That username and password don’t match.') && !has($res, 'paused'));
+$res = (new Browser($base))->get('/enter?t=' . lf_host_token_make(['ref' => 'e2e-1', 'acct' => 'e2e-A'], $hostSecret));
+check('the host\'s link is refused with the reason, and sets no cookie', $res['status'] === 403 && has($res, 'This forum is paused for your account.') && !isset($res['headers']['set-cookie']));
+check('the host can\'t add anybody meanwhile', host_api($base, ['op' => 'team.create', 'acct' => 'e2e-A', 'username' => 'E2ESneak', 'password' => 'e2e sneak password'])['status'] === 409);
+check('other accounts are not affected: the owner carries on', $owner->get('/')['status'] === 200);
+$res = host_api($base, ['op' => 'acct.resume', 'acct' => 'e2e-A']);
+check('resuming lets them back in', $res['status'] === 200 && to((new Browser($base))->post('/login', ['username' => 'e2equin', 'password' => 'e2e quin password'], $origin), '/')
+    && to((new Browser($base))->get('/enter?t=' . lf_host_token_make(['ref' => 'e2e-1', 'acct' => 'e2e-A'], $hostSecret)), '/'));
+$res = host_api($base, ['op' => 'acct.remove', 'acct' => 'e2e-A']);
+check('removing the account says how many people were removed', $res['status'] === 200 && $res['json']['ok'] === true && $res['json']['removed'] === 2);
+check('and nobody can log in again', has((new Browser($base))->post('/login', ['username' => 'e2equin', 'password' => 'e2e quin password'], $origin), 'That username and password don’t match.')
+    && (new Browser($base))->get('/enter?t=' . lf_host_token_make(['ref' => 'e2e-1', 'acct' => 'e2e-A'], $hostSecret))['status'] === 403);
+check('the forum still works for everyone else', $owner->get('/')['status'] === 200 && $alice->get('/')['status'] === 200);
+
 echo "Odds and ends\n";
 check('unknown pages are not found', $owner->get('/nope')['status'] === 404 && $owner->get('/t/9999')['status'] === 404 && $owner->get('/t/abc')['status'] === 404 && $owner->get('/c/nope')['status'] === 404 && $owner->get('/logout')['status'] === 404);
 $res = $guest->get('/asset.php?f=theme.css&v=1');

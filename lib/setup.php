@@ -40,6 +40,10 @@ function lf_migrate(PDO $pdo): array
         $pdo->exec("ALTER TABLE accounts ADD COLUMN host_ref VARCHAR(100) NULL AFTER member_limit");
         $changes[] = 'accounts.host_ref added';
     }
+    if (!lf_column_exists($pdo, 'accounts', 'suspended_at')) {
+        $pdo->exec("ALTER TABLE accounts ADD COLUMN suspended_at DATETIME NULL AFTER host_ref");
+        $changes[] = 'accounts.suspended_at added';
+    }
     if (!lf_column_exists($pdo, 'invites', 'note')) {
         $pdo->exec("ALTER TABLE invites ADD COLUMN note VARCHAR(100) NOT NULL DEFAULT '' AFTER created_by");
         $changes[] = 'invites.note added';

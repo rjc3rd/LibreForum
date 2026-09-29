@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   name          VARCHAR(100) NOT NULL,
   member_limit  SMALLINT UNSIGNED NULL,               -- most people this account may have, NULL for no limit
   host_ref      VARCHAR(100) NULL,                    -- the host app's own id for this account, if any
+  suspended_at  DATETIME NULL,                        -- paused by the host app (say its customer stopped paying), NULL when not
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_accounts_host (host_ref)

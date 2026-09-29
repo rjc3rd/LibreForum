@@ -102,6 +102,70 @@ function lf_account_full(PDO $pdo, int $accountId): bool
     return $seats['limit'] !== null && $seats['used'] >= $seats['limit'];
 }
 
+const LF_ACCOUNT_PAUSED = 'This account is paused.';
+const LF_STAFF_ACCOUNT = 'That account holds the forum’s own staff.';
+
+// Whether an account is paused: its host app switched it off (say its customer stopped paying). Nobody from it can come
+// in or log in until it is resumed, and what its people wrote stays as it was.
+function lf_account_suspended(PDO $pdo, int $accountId): bool
+{
+    $stmt = $pdo->prepare("SELECT suspended_at IS NOT NULL FROM accounts WHERE id = :a");
+    $stmt->execute(['a' => $accountId]);
+    return (bool) $stmt->fetchColumn();
+}
+
+// Whether any of the forum's own staff (the owner, moderators) belong to an account. A host app can pause or remove
+// its accounts, but never those.
+function lf_account_has_staff(PDO $pdo, int $accountId): bool
+{
+    $stmt = $pdo->prepare("SELECT 1 FROM members WHERE account_id = :a AND role <> 'member' AND status <> 'removed' LIMIT 1");
+    $stmt->execute(['a' => $accountId]);
+    return (bool) $stmt->fetchColumn();
+}
+
+// The host app pauses an account ($on) or resumes it. Pausing twice keeps the first time. Returns a message when it
+// can't be done.
+function lf_account_suspend(PDO $pdo, int $accountId, bool $on): ?string
+{
+    if (!$on) {
+        $pdo->prepare("UPDATE accounts SET suspended_at = NULL WHERE id = :a")->execute(['a' => $accountId]);
+        return null;
+    }
+    if (lf_account_has_staff($pdo, $accountId)) {
+        return LF_STAFF_ACCOUNT;
+    }
+    $pdo->prepare("UPDATE accounts SET suspended_at = COALESCE(suspended_at, :n) WHERE id = :a")->execute(['n' => lf_now(), 'a' => $accountId]);
+    return null;
+}
+
+// The host app's account is gone for good: everybody in it becomes a "Former member" (what they wrote stays), their
+// logins end and open invitations are cancelled. The account stays paused, so nobody can be brought back into it by
+// mistake. Returns [message, null], or [null, how many people were removed].
+function lf_account_remove(PDO $pdo, int $accountId): array
+{
+    if (lf_account_has_staff($pdo, $accountId)) {
+        return [LF_STAFF_ACCOUNT, null];
+    }
+    $pdo->beginTransaction();
+    try {
+        $stmt = $pdo->prepare("SELECT id FROM members WHERE account_id = :a AND status <> 'removed' FOR UPDATE");
+        $stmt->execute(['a' => $accountId]);
+        $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($ids as $id) {
+            lf_member_wipe($pdo, (int) $id);
+        }
+        $pdo->prepare("DELETE FROM invites WHERE account_id = :a AND used_at IS NULL")->execute(['a' => $accountId]);
+        $pdo->prepare("UPDATE accounts SET suspended_at = COALESCE(suspended_at, :n) WHERE id = :a")->execute(['n' => lf_now(), 'a' => $accountId]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+    return [null, count($ids)];
+}
+
 // ---------- members ----------
 
 function lf_owner_exists(PDO $pdo): bool
@@ -445,6 +509,10 @@ function lf_invite_accept(PDO $pdo, string $token, string $username, string $pas
             return [$gone, null];
         }
         $pdo->prepare("SELECT id FROM accounts WHERE id = :a FOR UPDATE")->execute(['a' => $invite['account_id']]);
+        if (lf_account_suspended($pdo, (int) $invite['account_id'])) {
+            $pdo->rollBack();
+            return [LF_ACCOUNT_PAUSED, null];
+        }
         if (lf_account_full($pdo, (int) $invite['account_id'])) {
             $pdo->rollBack();
             return ['This account has no free places left.', null];

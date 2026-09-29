@@ -680,6 +680,62 @@ lf_team_remove($pdo, $teamAccount, (int) $ninaId);
 lf_team_remove($pdo, $teamAccount, $piaId);
 check('and removing them frees the places again', lf_team_list($pdo, $teamAccount)['members'] === [] && lf_team_list($pdo, $teamAccount)['seats']['used'] === 1);
 
+echo "Pausing and removing an account\n";
+[$claims] = lf_host_token_verify($make(['ref' => 'pause-holder', 'acct' => 'PAUSE-A', 'acct_name' => 'Pause Co']), $secret);
+$pauseHolder = (int) lf_host_enter($pdo, $claims)[1];
+$pauseAccount = (int) lf_account_id_for_host($pdo, 'PAUSE-A');
+lf_member_set_username($pdo, $pauseHolder, 'PauseHolder');
+[, $quinnId] = lf_team_create($pdo, $pauseAccount, 'Quinn', 'quinn has a password');
+[, $raeId] = lf_team_create($pdo, $pauseAccount, 'Rae', 'rae has a password');
+$quinnPost = tid(lf_thread_create($pdo, me($pdo, (int) $quinnId), (int) $help['id'], 'Quinn asks something', 'A question from Quinn.'));
+[, $pendingInvite] = lf_team_invite($pdo, $pauseAccount, 'Waiting');
+$quinnSession = (string) lf_session_start($pdo, (int) $quinnId);
+$holderSession = (string) lf_session_start($pdo, $pauseHolder, true);
+check('an account is not paused to begin with', !lf_account_suspended($pdo, $pauseAccount) && lf_session_lookup($pdo, $quinnSession) !== null && lf_session_lookup($pdo, $holderSession) !== null);
+[$status, $answer] = lf_host_api($pdo, ['op' => 'acct.suspend', 'acct' => 'PAUSE-A']);
+check('the host pauses an account, and only that one', $status === 200 && $answer === ['ok' => true] && lf_account_suspended($pdo, $pauseAccount) && !lf_account_suspended($pdo, $teamAccount) && !lf_account_suspended($pdo, 1));
+$pdo->exec("UPDATE accounts SET suspended_at = '2020-01-01 00:00:00' WHERE id = $pauseAccount");
+lf_host_api($pdo, ['op' => 'acct.suspend', 'acct' => 'PAUSE-A']);
+check('pausing twice keeps the first time', one($pdo, "SELECT suspended_at FROM accounts WHERE id = $pauseAccount") === '2020-01-01 00:00:00');
+check('open logins of its people stop working, the holder\'s too', lf_session_lookup($pdo, $quinnSession) === null && lf_session_lookup($pdo, $holderSession) === null);
+check('a team member can\'t log in, and is told why, but only when the password is right',
+    lf_login($pdo, 'quinn', 'quinn has a password', '203.0.113.80')[0] === 'This account is paused. Please ask the person who leads your team.'
+    && lf_login($pdo, 'quinn', 'the wrong password', '203.0.113.80')[0] === 'That username and password don’t match.' && (int) one($pdo, "SELECT COUNT(*) FROM sessions WHERE member_id = $quinnId") === 1);
+[$holderClaims] = lf_host_token_verify($make(['ref' => 'pause-holder', 'acct' => 'PAUSE-A']), $secret);
+check('the holder can\'t come in through the host, and the link isn\'t used up', lf_host_enter($pdo, $holderClaims)[0] === 'This forum is paused for your account.'
+    && (int) one($pdo, "SELECT COUNT(*) FROM host_tokens WHERE jti = '{$holderClaims['jti']}'") === 0);
+[$newClaims] = lf_host_token_verify($make(['ref' => 'pause-newcomer', 'acct' => 'PAUSE-A']), $secret);
+check('nor can somebody new from that account', lf_host_enter($pdo, $newClaims)[0] === 'This forum is paused for your account.' && (int) one($pdo, "SELECT COUNT(*) FROM members WHERE host_ref = 'pause-newcomer'") === 0);
+check('an invitation to it can\'t be accepted, and stays open', lf_invite_accept($pdo, (string) $pendingInvite, 'Sneaky', 'a fine password', 'a fine password') === ['This account is paused.', null] && lf_invite_find($pdo, (string) $pendingInvite) !== null);
+check('the host can\'t add or invite anybody while it is paused', lf_host_api($pdo, ['op' => 'team.create', 'acct' => 'PAUSE-A', 'username' => 'Sneaky', 'password' => 'sneaky has a password']) === [409, ['ok' => false, 'error' => 'This account is paused.']]
+    && lf_host_api($pdo, ['op' => 'team.invite', 'acct' => 'PAUSE-A', 'note' => 'Sneaky'])[0] === 409 && (int) one($pdo, "SELECT COUNT(*) FROM members WHERE username = 'Sneaky'") === 0);
+$quinnThread = lf_thread_get($pdo, $quinnPost);
+check('what its people wrote stays, under their names', (int) one($pdo, "SELECT COUNT(*) FROM posts WHERE thread_id = $quinnPost") === 1 && lf_display_name($quinnThread['author'], $quinnThread['author_status']) === 'Quinn');
+[$status] = lf_host_api($pdo, ['op' => 'acct.resume', 'acct' => 'PAUSE-A']);
+check('resuming lets them back: an open login works again, so do passwords and the host\'s link', $status === 200 && !lf_account_suspended($pdo, $pauseAccount) && lf_session_lookup($pdo, $quinnSession) !== null
+    && lf_login($pdo, 'quinn', 'quinn has a password', '203.0.113.81')[0] === null && lf_host_enter($pdo, $holderClaims)[0] === null);
+$pauseMod = mk($pdo, 'PauseMod', 'moderator', $pauseAccount);
+check('an account with the forum\'s own staff can\'t be paused or removed', lf_host_api($pdo, ['op' => 'acct.suspend', 'acct' => 'PAUSE-A']) === [409, ['ok' => false, 'error' => 'That account holds the forum’s own staff.']]
+    && lf_host_api($pdo, ['op' => 'acct.remove', 'acct' => 'PAUSE-A'])[0] === 409 && !lf_account_suspended($pdo, $pauseAccount)
+    && (int) one($pdo, "SELECT COUNT(*) FROM members WHERE account_id = $pauseAccount AND status = 'removed'") === 0);
+$pdo->exec("DELETE FROM members WHERE id = {$pauseMod['id']}");
+check('an account nobody has come from is simply fine to pause, resume or remove, and none is made', lf_host_api($pdo, ['op' => 'acct.suspend', 'acct' => 'NEVER-EXISTED']) === [200, ['ok' => true]]
+    && lf_host_api($pdo, ['op' => 'acct.resume', 'acct' => 'NEVER-EXISTED']) === [200, ['ok' => true]] && lf_host_api($pdo, ['op' => 'acct.remove', 'acct' => 'NEVER-EXISTED']) === [200, ['ok' => true, 'removed' => 0]]
+    && lf_account_id_for_host($pdo, 'NEVER-EXISTED') === null);
+check('the operations need a valid account id, like every other', lf_host_api($pdo, ['op' => 'acct.suspend'])[0] === 400 && lf_host_api($pdo, ['op' => 'acct.remove', 'acct' => 'a b'])[0] === 400);
+[$status, $answer] = lf_host_api($pdo, ['op' => 'acct.remove', 'acct' => 'PAUSE-A']);
+check('removing an account says how many people were removed', $status === 200 && $answer === ['ok' => true, 'removed' => 3]);
+check('everybody in it is a Former member: no name, no password, no logins', (int) one($pdo, "SELECT COUNT(*) FROM members WHERE account_id = $pauseAccount AND status = 'removed' AND username IS NULL AND password_hash IS NULL") === 3
+    && (int) one($pdo, "SELECT COUNT(*) FROM sessions WHERE member_id IN ($quinnId, $raeId, $pauseHolder)") === 0 && lf_session_lookup($pdo, $quinnSession) === null);
+$quinnThread = lf_thread_get($pdo, $quinnPost);
+check('what they wrote stays, now from a Former member', (int) one($pdo, "SELECT COUNT(*) FROM posts WHERE thread_id = $quinnPost") === 1 && lf_display_name($quinnThread['author'], $quinnThread['author_status']) === 'Former member');
+check('its open invitations are gone and the account stays paused', lf_invite_find($pdo, (string) $pendingInvite) === null && lf_account_suspended($pdo, $pauseAccount));
+check('nobody is brought back: not the holder, not somebody new, not by a password', lf_host_enter($pdo, lf_host_token_verify($make(['ref' => 'pause-holder', 'acct' => 'PAUSE-A']), $secret)[0])[0] === 'This forum isn’t available for your account.'
+    && lf_host_enter($pdo, lf_host_token_verify($make(['ref' => 'pause-again', 'acct' => 'PAUSE-A']), $secret)[0])[0] === 'This forum is paused for your account.'
+    && lf_login($pdo, 'quinn', 'quinn has a password', '203.0.113.82')[0] === 'That username and password don’t match.');
+check('removing twice is fine, and the other accounts are untouched', lf_host_api($pdo, ['op' => 'acct.remove', 'acct' => 'PAUSE-A']) === [200, ['ok' => true, 'removed' => 0]]
+    && !lf_account_suspended($pdo, $teamAccount) && lf_account_seats($pdo, $teamAccount)['used'] === 1 && lf_account_seats($pdo, $pauseAccount)['used'] === 0);
+
 $sign = function (string $body, array $tweak = []) use ($secret, $now) {
     $time = (string) ($tweak['time'] ?? $now);
     $nonce = $tweak['nonce'] ?? bin2hex(random_bytes(16));
@@ -720,11 +776,12 @@ cfg([]);
 
 echo "Bringing an older database up to date\n";
 $pdo->exec("ALTER TABLE invites DROP COLUMN note");
+$pdo->exec("ALTER TABLE accounts DROP COLUMN suspended_at");
 $pdo->exec("ALTER TABLE sessions DROP COLUMN via_host");
 $pdo->exec("ALTER TABLE accounts DROP INDEX uq_accounts_host");
 $pdo->exec("ALTER TABLE accounts DROP COLUMN host_ref");
 $changes = lf_install_schema($pdo);
-check('missing columns and keys are added', count($changes) === 4 && lf_column_exists($pdo, 'sessions', 'via_host') && lf_column_exists($pdo, 'accounts', 'host_ref') && lf_index_exists($pdo, 'accounts', 'uq_accounts_host') && lf_column_exists($pdo, 'invites', 'note'));
+check('missing columns and keys are added', count($changes) === 5 && lf_column_exists($pdo, 'sessions', 'via_host') && lf_column_exists($pdo, 'accounts', 'host_ref') && lf_column_exists($pdo, 'accounts', 'suspended_at') && lf_index_exists($pdo, 'accounts', 'uq_accounts_host') && lf_column_exists($pdo, 'invites', 'note'));
 check('and doing it again changes nothing', lf_install_schema($pdo) === []);
 
 echo "An owner who only comes in through another app\n";

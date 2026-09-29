@@ -24,6 +24,13 @@
 //   team.invite  {"note": "Maria", "days": 7}         a one-time invitation link instead (shown only now)
 //   team.revoke  {"invite": 3}                        cancels an open invitation
 //   team.remove  {"member": 5}                        takes somebody off the team
+//   acct.suspend                                     pauses the account (its customer stopped paying, say): nobody from it can come in,
+//                                                    log in or accept an invitation, and their open logins stop working. What they wrote stays
+//   acct.resume                                      lets it back in
+//   acct.remove  -> {"ok": true, "removed": 3}       the account is gone for good: everybody in it becomes a "Former member", logins end,
+//                                                    open invitations are cancelled, and it stays paused
+// Pausing or removing an account that has the forum's own staff (the owner, moderators) is refused, and one nobody has come
+// from yet is simply fine (nothing to do). While an account is paused, team.create and team.invite are refused too.
 // Answers are JSON: {"ok": true, ...} or {"ok": false, "error": "..."}.
 
 declare(strict_types=1);
@@ -34,6 +41,7 @@ require_once __DIR__ . '/text.php';
 const LF_HOST_MAX_LIFETIME = 300;
 const LF_HOST_API_WINDOW = 120;
 const LF_HOST_LINK_USED = 'This link was already used. Please open the forum again from your account.';
+const LF_HOST_PAUSED = 'This forum is paused for your account.';
 
 function lf_b64u(string $binary): string
 {
@@ -105,7 +113,7 @@ function lf_host_enter(PDO $pdo, array $claims): array
         try {
             $pdo->prepare("INSERT INTO host_tokens (jti, expires_at) VALUES (:j, :e)")
                 ->execute(['j' => $claims['jti'], 'e' => gmdate('Y-m-d H:i:s', $claims['exp'] + 3600)]);
-            $stmt = $pdo->prepare("SELECT id, status FROM members WHERE host_ref = :r FOR UPDATE");
+            $stmt = $pdo->prepare("SELECT id, account_id, status FROM members WHERE host_ref = :r FOR UPDATE");
             $stmt->execute(['r' => $claims['ref']]);
             $member = $stmt->fetch();
             if ($member) {
@@ -113,9 +121,17 @@ function lf_host_enter(PDO $pdo, array $claims): array
                     $pdo->rollBack();
                     return ['This forum isn’t available for your account.', null];
                 }
+                if (lf_account_suspended($pdo, (int) $member['account_id'])) {
+                    $pdo->rollBack();
+                    return [LF_HOST_PAUSED, null];
+                }
                 $memberId = (int) $member['id'];
             } else {
                 $accountId = lf_account_for_host($pdo, $claims['acct'], $claims['acct_name']);
+                if (lf_account_suspended($pdo, $accountId)) {
+                    $pdo->rollBack();
+                    return [LF_HOST_PAUSED, null];
+                }
                 if (lf_account_full($pdo, $accountId)) {
                     $pdo->rollBack();
                     return ['This account has no free places left.', null];
@@ -186,11 +202,17 @@ function lf_host_api(PDO $pdo, array $input): array
                 'invites' => array_map(fn ($i) => ['id' => (int) $i['id'], 'note' => $i['note'], 'created' => $date($i['created_at']), 'expires' => $date($i['expires_at'])], $team['invites']),
                 'seats' => $team['seats']]];
         case 'team.invite':
+            if ($accountId !== null && lf_account_suspended($pdo, $accountId)) {
+                return [409, ['ok' => false, 'error' => LF_ACCOUNT_PAUSED]];
+            }
             $accountId ??= lf_account_for_host($pdo, $acct, '');
             [$problem, $token, $expires] = lf_team_invite($pdo, $accountId, (string) ($input['note'] ?? ''), (int) ($input['days'] ?? 7));
             return $problem !== null ? [409, ['ok' => false, 'error' => $problem]]
                 : [200, ['ok' => true, 'url' => lf_abs_url('invite/' . $token), 'expires' => $date($expires)]];
         case 'team.create':
+            if ($accountId !== null && lf_account_suspended($pdo, $accountId)) {
+                return [409, ['ok' => false, 'error' => LF_ACCOUNT_PAUSED]];
+            }
             $accountId ??= lf_account_for_host($pdo, $acct, '');
             [$problem, $memberId] = lf_team_create($pdo, $accountId, (string) ($input['username'] ?? ''), (string) ($input['password'] ?? ''));
             return $problem !== null ? [409, ['ok' => false, 'error' => $problem]] : [200, ['ok' => true, 'id' => $memberId]];
@@ -205,6 +227,14 @@ function lf_host_api(PDO $pdo, array $input): array
         case 'team.remove':
             $problem = $accountId === null ? 'That person isn’t on your team.' : lf_team_remove($pdo, $accountId, (int) ($input['member'] ?? 0));
             return $problem !== null ? [409, ['ok' => false, 'error' => $problem]] : [200, ['ok' => true]];
+        case 'acct.suspend':
+        case 'acct.resume':
+            // An account nobody has come from yet has nothing to pause or resume.
+            $problem = $accountId === null ? null : lf_account_suspend($pdo, $accountId, $op === 'acct.suspend');
+            return $problem !== null ? [409, ['ok' => false, 'error' => $problem]] : [200, ['ok' => true]];
+        case 'acct.remove':
+            [$problem, $removed] = $accountId === null ? [null, 0] : lf_account_remove($pdo, $accountId);
+            return $problem !== null ? [409, ['ok' => false, 'error' => $problem]] : [200, ['ok' => true, 'removed' => $removed]];
     }
     return [400, ['ok' => false, 'error' => 'Unknown operation.']];
 }

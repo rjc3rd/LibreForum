@@ -43,7 +43,7 @@ function lf_session_start(PDO $pdo, int $memberId, bool $viaHost = false): strin
 }
 
 // The member a login cookie belongs to (with the login's own csrf and flash values), or null when the
-// cookie is unknown, expired, or the member was removed.
+// cookie is unknown, expired, the member was removed, or their account is paused (the login comes back if it is resumed).
 function lf_session_lookup(PDO $pdo, string $token): ?array
 {
     if (!preg_match('~^[0-9a-f]{64}$~D', $token)) {
@@ -52,8 +52,8 @@ function lf_session_lookup(PDO $pdo, string $token): ?array
     $stmt = $pdo->prepare(
         "SELECT m.id, m.account_id, m.username, m.role, m.status, m.host_ref, m.created_at, m.last_seen_at,
                 s.csrf, s.flash, s.via_host, s.created_at AS session_created, s.last_used_at AS session_used, HEX(s.token_hash) AS session_key
-         FROM sessions s JOIN members m ON m.id = s.member_id
-         WHERE s.token_hash = :t AND m.status <> 'removed'"
+         FROM sessions s JOIN members m ON m.id = s.member_id JOIN accounts a ON a.id = m.account_id
+         WHERE s.token_hash = :t AND m.status <> 'removed' AND a.suspended_at IS NULL"
     );
     $stmt->execute(['t' => lf_token_hash($token)]);
     $member = $stmt->fetch();
@@ -111,7 +111,7 @@ function lf_login(PDO $pdo, string $username, string $password, string $ip): arr
     if ((int) $stmt->fetchColumn() >= LF_LOGIN_TRIES) {
         return ['Too many wrong passwords. Please wait 15 minutes and try again.', null];
     }
-    $stmt = $pdo->prepare("SELECT id, password_hash, status, host_ref FROM members WHERE username_key = :k");
+    $stmt = $pdo->prepare("SELECT id, account_id, password_hash, status, host_ref FROM members WHERE username_key = :k");
     $stmt->execute(['k' => lf_username_key(trim($username))]);
     $member = $stmt->fetch();
     $hash = $member['password_hash'] ?? null;
@@ -121,6 +121,10 @@ function lf_login(PDO $pdo, string $username, string $password, string $ip): arr
     if (!$member || !$ok || $hash === null || $member['status'] === 'removed' || $member['host_ref'] !== null) {
         $pdo->prepare("INSERT INTO login_failures (who, at) VALUES (:w, :t)")->execute(['w' => $who, 't' => lf_now()]);
         return ['That username and password don’t match.', null];
+    }
+    // Only said to somebody who typed the right password, so it tells a stranger nothing.
+    if (lf_account_suspended($pdo, (int) $member['account_id'])) {
+        return ['This account is paused. Please ask the person who leads your team.', null];
     }
     if (password_needs_rehash($hash, PASSWORD_DEFAULT)) {
         $pdo->prepare("UPDATE members SET password_hash = :h WHERE id = :m")->execute(['h' => password_hash($password, PASSWORD_DEFAULT), 'm' => $member['id']]);
