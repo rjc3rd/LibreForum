@@ -8,7 +8,7 @@ if (PHP_SAPI !== 'cli') {
     exit("Run from the command line.\n");
 }
 require __DIR__ . '/../lib/bootstrap.php';
-foreach (['http', 'theme', 'text', 'salt', 'auth', 'members', 'perm', 'setup', 'forum', 'maintain'] as $lib) {
+foreach (['http', 'theme', 'text', 'salt', 'auth', 'members', 'perm', 'setup', 'forum', 'maintain', 'pages'] as $lib) {
     require_once __DIR__ . "/../lib/$lib.php";
 }
 
@@ -475,6 +475,61 @@ check('an unknown or odd theme name falls back to the default', (function () {
     cfg([]);
     return $a === 'default' && $b === 'default';
 })());
+
+
+echo "Custom themes\n";
+$themes = sys_get_temp_dir() . '/lf-themes-' . bin2hex(random_bytes(4));
+mkdir("$themes/mine/assets", 0777, true);
+mkdir("$themes/mine/templates", 0777, true);
+file_put_contents("$themes/mine/assets/custom.css", ':root { --lf-accent: red; }');
+file_put_contents("$themes/mine/templates/rules.php", 'MY RULES');
+cfg(['theme' => 'mine', 'theme_paths' => [$themes]]);
+ob_start();
+lf_render('rules', ['rules' => []]);
+$mine = (string) ob_get_clean();
+check('a theme found in theme_paths can add a stylesheet and replace a page', lf_theme() === 'mine' && lf_theme_file('assets', 'custom.css', true) === "$themes/mine/assets/custom.css" && $mine === 'MY RULES');
+check('everything else still comes from the default theme', realpath((string) lf_theme_file('assets', 'theme.css')) === realpath(LF_ROOT . '/themes/default/assets/theme.css')
+    && realpath((string) lf_theme_file('templates', 'list.php')) === realpath(LF_ROOT . '/themes/default/templates/list.php') && lf_theme_file('assets', 'custom.css', false) !== null && lf_theme_file('assets', 'nothing.css') === null);
+foreach (['assets/custom.css', 'templates/rules.php'] as $file) {
+    unlink("$themes/mine/$file");
+}
+rmdir("$themes/mine/assets");
+rmdir("$themes/mine/templates");
+rmdir("$themes/mine");
+rmdir($themes);
+cfg([]);
+
+echo "Addresses and times\n";
+$saved = $_SERVER;
+$_SERVER['SCRIPT_NAME'] = '/index.php';
+$_SERVER['REQUEST_URI'] = '/t/12?page=2';
+check('at the top of a domain, addresses have no folder', lf_base() === '' && lf_url('t/1') === '/t/1' && lf_url() === '/' && lf_route_path() === '/t/12');
+$_SERVER['SCRIPT_NAME'] = '/forum/index.php';
+$_SERVER['REQUEST_URI'] = '/forum/c/help?page=2';
+check('in a sub-folder, the folder is added to addresses and taken off the page asked for', lf_base() === '/forum' && lf_url('t/1') === '/forum/t/1' && lf_url() === '/forum/' && lf_route_path() === '/c/help');
+$_SERVER['REQUEST_URI'] = '/forum/';
+check('the front page is /', lf_route_path() === '/');
+$_SERVER['REQUEST_URI'] = '/forum/login';
+$_SERVER['HTTP_HOST'] = 'example.test';
+ob_start();
+lf_dispatch($pdo, 'GET', lf_route_path());
+$login = (string) ob_get_clean();
+check('a whole page in a sub-folder links everything inside the folder', str_contains($login, 'action="/forum/login"') && str_contains($login, 'href="/forum/asset.php?f=theme.css&amp;v=')
+    && !preg_match('~(href|src|action)="/(?!forum/)~', $login));
+check('invitation links use the address the forum is asked at', lf_abs_url('invite/x') === 'http://example.test/forum/invite/x' && (function () {
+    cfg(['url' => 'https://forum.example/']);
+    $a = lf_abs_url('invite/x');
+    cfg([]);
+    return $a === 'https://forum.example/invite/x';
+})());
+$_SERVER = $saved;
+check('HTTPS is known from the server, or from a trusted proxy', lf_is_https(['HTTPS' => 'on']) && !lf_is_https(['HTTPS' => 'off']) && !lf_is_https([])
+    && lf_is_https(['REMOTE_ADDR' => '10.0.0.1', 'HTTP_X_FORWARDED_PROTO' => 'https']) && !lf_is_https(['REMOTE_ADDR' => '192.0.2.1', 'HTTP_X_FORWARDED_PROTO' => 'https']));
+$now = strtotime('2026-09-29 12:00:00 UTC');
+check('times are shown as "5 min ago", "3 hours ago" and, after a week, as dates', lf_ago('2026-09-29 11:59:40', $now) === 'just now' && lf_ago('2026-09-29 11:55:00', $now) === '5 min ago'
+    && lf_ago('2026-09-29 11:00:00', $now) === '1 hour ago' && lf_ago('2026-09-29 09:00:00', $now) === '3 hours ago' && lf_ago('2026-09-28 12:00:00', $now) === '1 day ago'
+    && lf_ago('2026-09-22 12:00:00', $now) === 'Sep 22' && lf_ago('2025-12-25 12:00:00', $now) === 'Dec 25, 2025' && lf_ago('2026-09-29 12:05:00', $now) === 'just now');
+check('and as machine-readable times', lf_iso('2026-09-29 12:00:00') === '2026-09-29T12:00:00Z');
 
 echo "\n", $passed, ' passed, ', $failed, " failed\n";
 exit($failed ? 1 : 0);

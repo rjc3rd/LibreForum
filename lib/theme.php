@@ -60,7 +60,9 @@ function lf_render(string $template, array $vars = []): void
 // A page: the template's own content, wrapped in the theme's layout (head, bar, footer).
 function lf_page(string $template, array $vars = [], int $status = 200): void
 {
-    http_response_code($status);
+    if (!headers_sent()) {
+        http_response_code($status);
+    }
     ob_start();
     lf_render($template, $vars);
     $content = (string) ob_get_clean();

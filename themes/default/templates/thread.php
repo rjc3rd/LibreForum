@@ -39,7 +39,7 @@ $tid = (int) $thread['id'];
     $isFirst = $pid === $firstId;
     $name = lf_display_name($p['username'], $p['member_status']);
     $canDelete = $staff || ($mine && (!$isFirst || !$othersReplied));
-    $canReport = $canWrite && !$mine;
+    $canReport = $canWrite && !$mine && !$staff;
 ?>
   <?php if ($firstNew === $pid): ?><div class="lf-newmark" role="separator"><span>New since your last visit</span></div><?php endif; ?>
   <article class="lf-post<?= $isFirst ? ' is-first' : '' ?><?= $firstNew !== null && $pid >= $firstNew ? ' is-new' : '' ?>" id="post-<?= $pid ?>">

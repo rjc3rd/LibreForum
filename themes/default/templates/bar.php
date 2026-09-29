@@ -1,4 +1,5 @@
 <?php /* Top bar: name, main links, new thread, who is logged in. Vars: $me, $forum, $path, $staff, $reportsOpen, $canWrite, $csrf. */
+$newQuery = preg_match('~^/c/([a-z0-9-]{1,40})$~', $path, $onCategory) ? '?c=' . $onCategory[1] : '';
 $here = fn (string ...$starts) => array_filter($starts, fn ($s) => $path === $s || str_starts_with($path, $s . '/')) ? ' aria-current="page"' : '';
 ?>
 <header class="lf-bar"><div class="lf-bar-inner">
@@ -11,7 +12,7 @@ $here = fn (string ...$starts) => array_filter($starts, fn ($s) => $path === $s 
     <?php endif; ?>
   </nav>
   <span class="lf-bar-grow"></span>
-  <?php if ($canWrite): ?><a class="lf-btn lf-btn-primary" href="<?= h(lf_url('new')) ?>"><?= lf_icon('plus') ?> New thread</a><?php endif; ?>
+  <?php if ($canWrite): ?><a class="lf-btn lf-btn-primary" href="<?= h(lf_url('new') . $newQuery) ?>"><?= lf_icon('plus') ?> New thread</a><?php endif; ?>
   <div class="lf-user">
     <a class="lf-me" href="<?= h(lf_url('settings')) ?>"<?= $here('/settings') ?>><?= h($me['username']) ?><?php if ($me['role'] !== 'member'): ?> <span class="lf-badge lf-badge-<?= h($me['role']) ?>"><?= $me['role'] === 'owner' ? 'Owner' : 'Moderator' ?></span><?php endif; ?></a>
     <?= lf_form('logout', $csrf) ?><button class="lf-btn" type="submit">Log out</button></form>

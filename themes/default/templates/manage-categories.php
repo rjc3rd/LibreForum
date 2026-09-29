@@ -1,7 +1,7 @@
 <?php /* Categories: rename, say who may start threads, reorder, delete, add. Vars: $categories, $csrf. */ ?>
 <?php foreach ($categories as $i => $c): $cid = (int) $c['id']; ?>
 <section class="lf-card lf-category">
-  <?= lf_form("manage/categories/$cid/save", $csrf, 'lf-form') ?>
+  <?= lf_form("manage/categories/$cid/save", $csrf, 'lf-form lf-form-cat') ?>
     <label>Name<input class="lf-input" type="text" name="name" maxlength="60" required value="<?= h($c['name']) ?>"></label>
     <label>Description<input class="lf-input" type="text" name="description" maxlength="200" value="<?= h($c['description']) ?>"></label>
     <label class="lf-check"><input type="checkbox" name="staff_only" value="1"<?= $c['staff_only'] ? ' checked' : '' ?>> Only moderators can start threads here (everyone can reply)</label>
@@ -19,7 +19,7 @@
 
 <section class="lf-card">
   <h2>Add a category</h2>
-  <?= lf_form('manage/categories', $csrf, 'lf-form') ?>
+  <?= lf_form('manage/categories', $csrf, 'lf-form lf-form-cat') ?>
     <label>Name<input class="lf-input" type="text" name="name" maxlength="60" required></label>
     <label>Description<input class="lf-input" type="text" name="description" maxlength="200"></label>
     <label class="lf-check"><input type="checkbox" name="staff_only" value="1"> Only moderators can start threads here (everyone can reply)</label>

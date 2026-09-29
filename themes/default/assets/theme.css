@@ -11,7 +11,7 @@
   --lf-border: #e3e2dc;
   --lf-ink: #0b0b0b;
   --lf-muted: #52514e;
-  --lf-faint: #8a8984;
+  --lf-faint: #6b6a65;
   --lf-accent: #4a3aa7;           /* buttons, links, the current tab */
   --lf-on-accent: #ffffff;
   --lf-accent-soft: #ecebfb;
@@ -107,6 +107,9 @@ code, pre { font-family: var(--lf-mono); }
 .lf-form .lf-select { width: 100%; }
 .lf-form-narrow { max-width: 420px; }
 .lf-form-row { grid-template-columns: repeat(2, minmax(0, 1fr)) auto; align-items: end; }
+.lf-form-cat { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.lf-form-cat > .lf-check, .lf-form-cat > div { grid-column: 1 / -1; }
+.lf-form label .lf-hint { font-weight: 500; }
 .lf-form-quiet { margin-top: 14px; text-align: center; }
 .lf-check { display: flex !important; align-items: center; gap: 8px !important; font-weight: 500 !important; }
 .lf-check input { width: 16px; height: 16px; accent-color: var(--lf-accent); }
@@ -247,7 +250,7 @@ a.lf-chip:hover { text-decoration: underline; }
   .lf-user { margin-left: auto; }
   .lf-thread { grid-template-columns: 1fr; }
   .lf-thread-stats { grid-auto-flow: column; justify-content: space-between; justify-items: start; text-align: left; }
-  .lf-form-row { grid-template-columns: 1fr; }
+  .lf-form-row, .lf-form-cat { grid-template-columns: 1fr; }
   .lf-post { padding: 14px 16px; }
   .lf-card { padding: 16px; }
   .lf-when { margin-left: 0; }

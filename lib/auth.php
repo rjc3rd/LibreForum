@@ -139,6 +139,14 @@ function lf_password_change(PDO $pdo, int $memberId, string $current, string $ne
     return null;
 }
 
+// Sets a member's password without needing the old one (for a lost password: bin/member.php password).
+// Every login of theirs ends.
+function lf_password_set(PDO $pdo, int $memberId, string $password): void
+{
+    $pdo->prepare("UPDATE members SET password_hash = :h WHERE id = :m AND status <> 'removed'")->execute(['h' => password_hash($password, PASSWORD_DEFAULT), 'm' => $memberId]);
+    lf_sessions_end_all($pdo, $memberId);
+}
+
 // Every form carries the login's own csrf value, so a page on another site can't post as the member.
 function lf_csrf_ok(?array $me, array $post): bool
 {

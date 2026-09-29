@@ -16,7 +16,8 @@
         <td><?= $m['role'] === 'owner' ? 'Owner' : ($m['role'] === 'moderator' ? 'Moderator' : 'Member') ?></td>
         <td><time datetime="<?= h(lf_iso($m['created_at'])) ?>"><?= h(lf_ago($m['created_at'])) ?></time></td>
         <td><?= $m['last_seen_at'] !== null ? '<time datetime="' . h(lf_iso($m['last_seen_at'])) . '">' . h(lf_ago($m['last_seen_at'])) . '</time>' : '<span class="lf-hint">never</span>' ?></td>
-        <td class="lf-actions">
+        <td>
+          <div class="lf-actions">
           <?php if (!$isMe && $m['role'] !== 'owner'): ?>
             <?php if ($m['role'] === 'member'): ?>
               <?= lf_form("manage/members/$mid/" . ($m['status'] === 'muted' ? 'unmute' : 'mute'), $csrf, 'lf-inline', $m['status'] === 'muted' ? '' : 'Mute this member? They can still read, but not write.') ?><button class="lf-btn lf-btn-small" type="submit"><?= $m['status'] === 'muted' ? 'Unmute' : 'Mute' ?></button></form>
@@ -26,6 +27,7 @@
               <?= lf_form("manage/members/$mid/remove", $csrf, 'lf-inline', 'Remove this member? What they wrote stays, shown as Former member.') ?><button class="lf-btn lf-btn-small lf-btn-danger" type="submit">Remove</button></form>
             <?php endif; ?>
           <?php endif; ?>
+          </div>
         </td>
       </tr>
     <?php endforeach; ?>

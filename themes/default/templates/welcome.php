@@ -3,7 +3,7 @@
 <div class="lf-auth"><div class="lf-card lf-welcome">
   <span class="lf-brand"><?php lf_render('logo'); ?><span><?= h($forum) ?></span></span>
   <h1>Welcome!</h1>
-  <p><?= $mode === 'invite' ? 'Choose the username other members will see, and a password to log in with.' : 'Choose the username other members will see.' ?> Your real name and email are never shown.</p>
+  <p><?= $mode === 'invite' ? 'Choose the username other members will see, and a password to log in with.' : 'Choose the username other members will see.' ?> No real name or email is needed.</p>
   <?php if ($rules): ?>
   <div class="lf-rules-box">
     <h2>Before you join in</h2>
@@ -13,8 +13,8 @@
   <form class="lf-form" method="post" action="<?= h($action) ?>">
     <?php if ($error): ?><p class="lf-error" role="alert"><?= h($error) ?></p><?php endif; ?>
     <?php if ($mode === 'name'): ?><input type="hidden" name="csrf" value="<?= h($csrf) ?>"><?php endif; ?>
-    <label>Username<input class="lf-input" type="text" name="username" minlength="3" maxlength="20" pattern="[A-Za-z0-9][A-Za-z0-9_]{2,19}" title="3 to 20 letters, digits or underscores" autocapitalize="none" spellcheck="false" autocomplete="username" required autofocus value="<?= h($username) ?>"></label>
-    <p class="lf-hint">3 to 20 letters, digits or underscores. You can’t change it later.</p>
+    <label>Username<input class="lf-input" type="text" name="username" minlength="3" maxlength="20" pattern="[A-Za-z0-9][A-Za-z0-9_]{2,19}" title="3 to 20 letters, digits or underscores" autocapitalize="none" spellcheck="false" autocomplete="username" required autofocus value="<?= h($username) ?>">
+      <small class="lf-hint">3 to 20 letters, digits or underscores. You can’t change it later.</small></label>
     <?php if ($mode === 'invite'): ?>
     <label>Password (10 characters or more)<input class="lf-input" type="password" name="password" minlength="10" autocomplete="new-password" required></label>
     <label>Type it again<input class="lf-input" type="password" name="password2" minlength="10" autocomplete="new-password" required></label>

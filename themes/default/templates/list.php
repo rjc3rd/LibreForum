@@ -4,7 +4,6 @@
     <h1><?= h($category['name'] ?? 'Latest threads') ?></h1>
     <p class="lf-sub"><?= $category !== null ? h($category['description']) : h(number_format($total) . ($total === 1 ? ' thread' : ' threads')) ?></p>
   </div>
-  <?php if ($canStart): ?><a class="lf-btn lf-btn-primary" href="<?= h(lf_url('new') . ($category !== null ? '?c=' . rawurlencode($category['slug']) : '')) ?>"><?= lf_icon('plus') ?> New thread</a><?php endif; ?>
 </div>
 
 <nav class="lf-pills" aria-label="Categories">

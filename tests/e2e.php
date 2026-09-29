@@ -18,12 +18,100 @@ $t = require __DIR__ . '/config.php';
 if (!str_ends_with((string) $t['e2e_db'], '_e2e')) {
     exit("Refusing to wipe {$t['e2e_db']}: the e2e database's name must end in _e2e.\n");
 }
-$pdo = lf_connect(['host' => $t['host'], 'name' => $t['e2e_db'], 'user' => $t['user'], 'pass' => $t['pass']]);
-$pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
-foreach ($pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN) as $table) {
-    $pdo->exec("DROP TABLE `$table`");
+$db = ['host' => $t['host'], 'name' => $t['e2e_db'], 'user' => $t['user'], 'pass' => $t['pass']];
+$pdo = lf_connect($db);
+$wipe = function () use ($pdo) {
+    $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+    foreach ($pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN) as $table) {
+        $pdo->exec("DROP TABLE `$table`");
+    }
+    $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+};
+$wipe();
+
+$failed = 0;
+$passed = 0;
+function check(string $what, bool $ok): void
+{
+    global $failed, $passed;
+    $ok ? $passed++ : $failed++;
+    echo ($ok ? '  ok    ' : '  FAIL  '), $what, "\n";
 }
-$pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+function one(PDO $pdo, string $sql): mixed
+{
+    return $pdo->query($sql)->fetchColumn();
+}
+
+// ---------- the command-line tools ----------
+// They read their settings from a temporary file (LIBREFORUM_CONFIG), which points at the e2e database.
+$settings = ['db' => $db, 'url' => 'https://forum.example', 'name' => 'CLI Forum', 'reserved_names' => [], 'limits' => ['posts_per_hour' => 1000, 'threads_per_day' => 1000, 'seconds_between_posts' => 0],
+    'session_days' => 30, 'trusted_proxies' => [], 'theme' => 'default', 'theme_paths' => []];
+lf_config($settings);
+$cliConfig = (string) tempnam(sys_get_temp_dir(), 'lf-cli');
+chmod($cliConfig, 0600);
+file_put_contents($cliConfig, '<?php return ' . var_export($settings, true) . ';');
+register_shutdown_function(fn () => @unlink($cliConfig));
+// Runs bin/<script>.php with the arguments, feeding $stdin (passwords). Returns [exit code, output].
+function cli(string $script, array $args = [], string $stdin = ''): array
+{
+    global $cliConfig;
+    $process = proc_open([PHP_BINARY, LF_ROOT . "/bin/$script.php", ...$args], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, LF_ROOT,
+        array_merge(getenv(), ['LIBREFORUM_CONFIG' => $cliConfig]));
+    fwrite($pipes[0], $stdin);
+    fclose($pipes[0]);
+    $out = stream_get_contents($pipes[1]) . stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($process), trim($out)];
+}
+$passwordTwice = "correct horse battery\ncorrect horse battery\n";
+
+echo "Command-line tools\n";
+[$code, $out] = cli('install');
+check('install creates the tables', $code === 0 && str_contains($out, 'Tables ready') && (int) one($pdo, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()") === 12);
+check('tools that act for the owner say when there is none', str_contains(cli('invite')[1], 'There is no owner yet') && str_contains(cli('category', ['list'])[1], 'There is no owner yet') && str_contains(cli('member', ['list'])[1], 'There is no owner yet'));
+check('owner explains how to use it', str_contains(cli('owner', ['cliboss'])[1], 'Usage'));
+check('a bad password stops it', cli('owner', ['cliboss', 'CLI Forum'], "short\nshort\n")[0] === 1 && (int) one($pdo, "SELECT COUNT(*) FROM members") === 0);
+[$code, $out] = cli('owner', ['cliboss', 'CLI Forum'], $passwordTwice);
+check('owner creates the owner and the first categories', $code === 0 && str_contains($out, 'Done.') && one($pdo, "SELECT role FROM members WHERE username = 'cliboss'") === 'owner' && (int) one($pdo, "SELECT COUNT(*) FROM categories") === 3);
+[$code, $out] = cli('owner', ['other', 'Second'], $passwordTwice);
+check('owner works once', $code === 1 && str_contains($out, 'already been set up'));
+
+[$code, $out] = cli('invite');
+check('invite prints a full link', $code === 0 && preg_match('~^https://forum\.example/invite/[0-9a-f]{32}$~', $out) === 1);
+[$problem, $mayaId] = lf_invite_accept($pdo, substr($out, -32), 'Maya', 'maya password 1', 'maya password 1');
+check('and the link works', $problem === null && (int) $mayaId > 0);
+check('invitations can be for moderators, and only for real roles', cli('invite', ['moderator', '30'])[0] === 0 && str_contains(cli('invite', ['owner'])[1], 'Unknown role.') && cli('invite', ['owner'])[0] === 1);
+
+check('category list shows the categories', str_contains(cli('category', ['list'])[1], 'help') && str_contains(cli('category', ['list'])[1], 'only moderators start threads'));
+check('a category can be added', cli('category', ['add', 'Off topic', 'Anything else', 'staff-only'])[1] === 'Added.' && (int) one($pdo, "SELECT staff_only FROM categories WHERE slug = 'off-topic'") === 1);
+check('renamed, opened up, moved and deleted', cli('category', ['rename', 'off-topic', 'Chatter'])[1] === 'Renamed.' && one($pdo, "SELECT name FROM categories WHERE slug = 'off-topic'") === 'Chatter'
+    && cli('category', ['staff-only', 'off-topic', 'off'])[1] === 'Saved.' && (int) one($pdo, "SELECT staff_only FROM categories WHERE slug = 'off-topic'") === 0
+    && cli('category', ['up', 'off-topic'])[1] === 'Moved.' && cli('category', ['delete', 'off-topic'])[1] === 'Deleted.' && (int) one($pdo, "SELECT COUNT(*) FROM categories WHERE slug = 'off-topic'") === 0);
+check('an unknown category is explained', str_contains(cli('category', ['delete', 'nope'])[1], 'There is no category'));
+
+check('member list shows everyone', str_contains(cli('member', ['list'])[1], 'cliboss') && str_contains(cli('member', ['list'])[1], 'Maya'));
+check('muting and unmuting', cli('member', ['mute', 'maya'])[1] === 'Done.' && one($pdo, "SELECT status FROM members WHERE id = $mayaId") === 'muted' && cli('member', ['unmute', 'maya'])[1] === 'Done.' && one($pdo, "SELECT status FROM members WHERE id = $mayaId") === 'active');
+check('roles change', cli('member', ['moderator', 'maya'])[1] === 'Done.' && one($pdo, "SELECT role FROM members WHERE id = $mayaId") === 'moderator' && cli('member', ['member', 'maya'])[0] === 0 && one($pdo, "SELECT role FROM members WHERE id = $mayaId") === 'member');
+[, $token] = lf_login($pdo, 'maya', 'maya password 1', '198.51.100.1');
+check('a lost password can be replaced, and old logins end', cli('member', ['password', 'maya'], "new maya password\nnew maya password\n")[1] === 'Password changed. Any logins they had were ended.'
+    && lf_session_lookup($pdo, (string) $token) === null && lf_login($pdo, 'maya', 'new maya password', '198.51.100.1')[0] === null && lf_login($pdo, 'maya', 'maya password 1', '198.51.100.1')[0] !== null);
+check('a mismatched new password is refused', cli('member', ['password', 'maya'], "new maya password\nnew maya passworX\n")[0] === 1);
+check('removing a member, and unknown members', cli('member', ['remove', 'maya'])[1] === 'Done.' && one($pdo, "SELECT status FROM members WHERE id = $mayaId") === 'removed' && str_contains(cli('member', ['mute', 'nobody'])[1], 'There is no member called nobody.'));
+check('the owner can’t be removed from here either', cli('member', ['remove', 'cliboss'])[0] === 1);
+
+check('maintain says what it did, or nothing with --quiet', str_contains(cli('maintain')[1], 'expired logins removed') && cli('maintain', ['--quiet'])[1] === '');
+
+$wipe();
+cli('install');
+[$code, $out] = cli('demo');
+check('the demo fills an empty forum', $code === 0 && str_contains($out, 'demo-password-123') && (int) one($pdo, "SELECT COUNT(*) FROM threads") === 7 && (int) one($pdo, "SELECT COUNT(*) FROM members") === 6
+    && (int) one($pdo, "SELECT COUNT(*) FROM posts") === 20 && (int) one($pdo, "SELECT COUNT(*) FROM reports") === 1);
+check('its people can log in', lf_login($pdo, 'maya', 'demo-password-123', '198.51.100.2')[0] === null && lf_login($pdo, 'demo_owner', 'demo-password-123', '198.51.100.2')[0] === null);
+check('and it won’t fill a forum that is in use', str_contains(cli('demo')[1], 'already has threads'));
+
+// ---------- a fresh forum for the web pages ----------
+$wipe();
 lf_install_schema($pdo);
 
 // ---------- the server ----------
@@ -98,14 +186,6 @@ final class Browser
     }
 }
 
-$failed = 0;
-$passed = 0;
-function check(string $what, bool $ok): void
-{
-    global $failed, $passed;
-    $ok ? $passed++ : $failed++;
-    echo ($ok ? '  ok    ' : '  FAIL  '), $what, "\n";
-}
 function csrf(array $res): string
 {
     return preg_match('~name="csrf" value="([0-9a-f]{32})"~', $res['body'], $m) ? $m[1] : '';
@@ -122,11 +202,6 @@ function to(array $res, string $path): bool
 {
     return $res['status'] === 303 && $res['location'] === $path;
 }
-function one(PDO $pdo, string $sql): mixed
-{
-    return $pdo->query($sql)->fetchColumn();
-}
-
 $guest = new Browser($base);
 $owner = new Browser($base);
 $alice = new Browser($base);
