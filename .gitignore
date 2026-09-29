@@ -1,0 +1,9 @@
+# Local settings with passwords/keys; config.example.php shows the shape.
+config.php
+
+.DS_Store
+
+# No .md files ever go to GitHub — standing rule. README.md is the one
+# exception (meant to be used on GitHub).
+*.md
+!README.md
