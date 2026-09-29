@@ -18,10 +18,12 @@
 // signed with three headers: X-Host-Time (Unix time, within 2 minutes), X-Host-Nonce (32 random hex characters,
 // used once) and X-Host-Signature (hex HMAC-SHA256 of "time.nonce.body" with the shared secret). Operations,
 // all for the account named in "acct":
-//   team.list                                  the team, open invitations and places used
-//   team.invite  {"note": "Maria", "days": 7}  a one-time invitation link (shown only now)
-//   team.revoke  {"invite": 3}                 cancels an open invitation
-//   team.remove  {"member": 5}                 takes somebody off the team
+//   team.list                                        the team, open invitations and places used
+//   team.create  {"username": "maria", "password": "…"}  adds somebody, with the username and password the account holder chose
+//   team.password  {"member": 5, "password": "…"}     a new password for somebody on the team (their logins end)
+//   team.invite  {"note": "Maria", "days": 7}         a one-time invitation link instead (shown only now)
+//   team.revoke  {"invite": 3}                        cancels an open invitation
+//   team.remove  {"member": 5}                        takes somebody off the team
 // Answers are JSON: {"ok": true, ...} or {"ok": false, "error": "..."}.
 
 declare(strict_types=1);
@@ -188,6 +190,13 @@ function lf_host_api(PDO $pdo, array $input): array
             [$problem, $token, $expires] = lf_team_invite($pdo, $accountId, (string) ($input['note'] ?? ''), (int) ($input['days'] ?? 7));
             return $problem !== null ? [409, ['ok' => false, 'error' => $problem]]
                 : [200, ['ok' => true, 'url' => lf_abs_url('invite/' . $token), 'expires' => $date($expires)]];
+        case 'team.create':
+            $accountId ??= lf_account_for_host($pdo, $acct, '');
+            [$problem, $memberId] = lf_team_create($pdo, $accountId, (string) ($input['username'] ?? ''), (string) ($input['password'] ?? ''));
+            return $problem !== null ? [409, ['ok' => false, 'error' => $problem]] : [200, ['ok' => true, 'id' => $memberId]];
+        case 'team.password':
+            $problem = $accountId === null ? 'That person isn’t on your team.' : lf_team_password($pdo, $accountId, (int) ($input['member'] ?? 0), (string) ($input['password'] ?? ''));
+            return $problem !== null ? [409, ['ok' => false, 'error' => $problem]] : [200, ['ok' => true]];
         case 'team.revoke':
             if ($accountId !== null) {
                 lf_team_revoke($pdo, $accountId, (int) ($input['invite'] ?? 0));

@@ -645,6 +645,41 @@ $pdo->exec("DELETE FROM members WHERE id = {$teamMod['id']}");
 check('a team member can be removed: their name and password go, what they wrote stays', lf_team_remove($pdo, $teamAccount, (int) $teamMemberId) === null && one($pdo, "SELECT status FROM members WHERE id = $teamMemberId") === 'removed'
     && lf_login($pdo, 'marial', 'a fine password', '203.0.113.70')[0] !== null && lf_team_list($pdo, $teamAccount)['members'] === [] && lf_username_problem($pdo, 'MariaL') === null);
 
+echo "A host account's team, chosen by its holder\n";
+[$problem, $ninaId] = lf_team_create($pdo, $teamAccount, '  Nina ', 'nina has a password');
+check('the holder adds somebody, choosing their username and password, and they log in with them', $problem === null && (int) one($pdo, "SELECT account_id FROM members WHERE id = $ninaId") === $teamAccount
+    && one($pdo, "SELECT host_ref FROM members WHERE id = $ninaId") === null && one($pdo, "SELECT role FROM members WHERE id = $ninaId") === 'member' && lf_login($pdo, 'nina', 'nina has a password', '203.0.113.71')[0] === null);
+check('the password is kept only as a hash', !str_contains(json_encode($pdo->query("SELECT * FROM members")->fetchAll(), JSON_INVALID_UTF8_SUBSTITUTE), 'nina has a password'));
+check('a taken name, a bad name and a weak password are refused', lf_team_create($pdo, $teamAccount, 'NINA', 'another good password')[0] === 'That name is already taken.'
+    && lf_team_create($pdo, $teamAccount, 'x', 'another good password')[0] !== null && lf_team_create($pdo, $teamAccount, 'Olga', 'short')[0] !== null && (int) one($pdo, "SELECT COUNT(*) FROM members WHERE account_id = $teamAccount AND status <> 'removed'") === 2);
+$pdo->exec("UPDATE accounts SET member_limit = 2 WHERE id = $teamAccount");
+check('with every place used, nobody more can be added', lf_team_create($pdo, $teamAccount, 'Olga', 'olga has a password') === ['This account has no free places left.', null] && (int) one($pdo, "SELECT COUNT(*) FROM members WHERE username = 'Olga'") === 0);
+$pdo->exec("UPDATE accounts SET member_limit = 5 WHERE id = $teamAccount");
+$ninaSession = (string) lf_session_start($pdo, (int) $ninaId);
+check('the holder sets a new password: it works, the old one stops and their logins end', lf_team_password($pdo, $teamAccount, (int) $ninaId, 'nina has a new password') === null
+    && lf_login($pdo, 'nina', 'nina has a password', '203.0.113.72')[0] !== null && lf_login($pdo, 'nina', 'nina has a new password', '203.0.113.73')[0] === null && lf_session_lookup($pdo, $ninaSession) === null);
+check('a new password has to be a good one', lf_team_password($pdo, $teamAccount, (int) $ninaId, 'short') !== null && lf_team_password($pdo, $teamAccount, (int) $ninaId, str_repeat('x', 80)) !== null);
+$teamMod = mk($pdo, 'TeamMod2', 'moderator', $teamAccount);
+check('it only reaches the team: not an account holder, forum staff or somebody from another account', lf_team_password($pdo, $teamAccount, (int) $holderId, 'nina has a new password') === 'That is an account holder, not a team member.'
+    && lf_team_password($pdo, $teamAccount, (int) $teamMod['id'], 'nina has a new password') === 'Moderators can only be changed by the forum’s owner.'
+    && lf_team_password($pdo, $teamAccount, (int) $alice['id'], 'nina has a new password') === 'That person isn’t on your team.' && lf_team_password($pdo, $teamAccount, 999999, 'nina has a new password') === 'That person isn’t on your team.'
+    && lf_team_password($pdo, $teamAccount + 999, (int) $ninaId, 'hijacked password 1') === 'That person isn’t on your team.' && lf_login($pdo, 'nina', 'nina has a new password', '203.0.113.74')[0] === null);
+$pdo->exec("DELETE FROM members WHERE id = {$teamMod['id']}");
+[$status, $answer] = lf_host_api($pdo, ['op' => 'team.create', 'acct' => 'TEAM-A', 'username' => 'Pia', 'password' => 'pia has a password']);
+$piaId = (int) ($answer['id'] ?? 0);
+check('the host API adds a team member', $status === 200 && $answer['ok'] === true && $piaId > 0 && (int) one($pdo, "SELECT account_id FROM members WHERE id = $piaId") === $teamAccount);
+[$status, $answer] = lf_host_api($pdo, ['op' => 'team.create', 'acct' => 'TEAM-A', 'username' => 'Pia', 'password' => 'pia has a password']);
+check('and refuses with a reason: 409', $status === 409 && $answer['ok'] === false && $answer['error'] === 'That name is already taken.');
+[$status] = lf_host_api($pdo, ['op' => 'team.password', 'acct' => 'TEAM-A', 'member' => $piaId, 'password' => 'pia has a new password']);
+check('sets a new password', $status === 200 && lf_login($pdo, 'pia', 'pia has a new password', '203.0.113.75')[0] === null);
+[$status] = lf_host_api($pdo, ['op' => 'team.password', 'acct' => 'SOMEBODY-ELSE', 'member' => $piaId, 'password' => 'hijacked password 1']);
+check('but only for the account it is asked about', $status === 409 && lf_login($pdo, 'pia', 'pia has a new password', '203.0.113.76')[0] === null && lf_host_api($pdo, ['op' => 'team.password', 'acct' => 'NEW-ACCOUNT', 'member' => $piaId, 'password' => 'x'])[0] === 409);
+[$status, $answer] = lf_host_api($pdo, ['op' => 'team.list', 'acct' => 'TEAM-A']);
+check('the team lists them', $status === 200 && array_column($answer['members'], 'username') === ['Nina', 'Pia'] && $answer['seats']['used'] === 3);
+lf_team_remove($pdo, $teamAccount, (int) $ninaId);
+lf_team_remove($pdo, $teamAccount, $piaId);
+check('and removing them frees the places again', lf_team_list($pdo, $teamAccount)['members'] === [] && lf_team_list($pdo, $teamAccount)['seats']['used'] === 1);
+
 $sign = function (string $body, array $tweak = []) use ($secret, $now) {
     $time = (string) ($tweak['time'] ?? $now);
     $nonce = $tweak['nonce'] ?? bin2hex(random_bytes(16));

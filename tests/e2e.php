@@ -450,6 +450,20 @@ curl_close($ch);
 check('another account can’t reach this team', host_api($base, ['op' => 'team.remove', 'acct' => 'somebody-else', 'member' => $samId])['status'] === 409 && host_api($base, ['op' => 'team.list', 'acct' => 'somebody-else'])['json']['members'] === []);
 check('the holder removes them, and they can no longer log in', host_api($base, ['op' => 'team.remove', 'acct' => 'e2e-A', 'member' => $samId])['status'] === 200
     && has((new Browser($base))->post('/login', ['username' => 'e2esam', 'password' => 'e2e sam password'], $origin), 'That username and password don’t match.') && to($teamMember->get('/'), '/login'));
+$res = host_api($base, ['op' => 'team.create', 'acct' => 'e2e-A', 'username' => 'E2ENina', 'password' => 'e2e nina password']);
+$ninaLogin = new Browser($base);
+check('the host adds a team member with a username and password of its choosing, and they log in on the forum straight away', $res['status'] === 200 && $res['json']['ok'] === true
+    && to($ninaLogin->post('/login', ['username' => 'e2enina', 'password' => 'e2e nina password'], $origin), '/') && $ninaLogin->get('/')['status'] === 200);
+$ninaId = host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A'])['json']['members'][0]['id'] ?? 0;
+check('a taken name and a weak password are refused with the reason', host_api($base, ['op' => 'team.create', 'acct' => 'e2e-A', 'username' => 'e2enina', 'password' => 'another good password'])['json']['error'] === 'That name is already taken.'
+    && host_api($base, ['op' => 'team.create', 'acct' => 'e2e-A', 'username' => 'E2EOlga', 'password' => 'short'])['status'] === 409);
+$res = host_api($base, ['op' => 'team.password', 'acct' => 'e2e-A', 'member' => $ninaId, 'password' => 'e2e nina new password']);
+check('the host sets a new password: their open login ends, the old password stops and the new one works', $res['status'] === 200 && to($ninaLogin->get('/'), '/login')
+    && has((new Browser($base))->post('/login', ['username' => 'e2enina', 'password' => 'e2e nina password'], $origin), 'That username and password don’t match.')
+    && to((new Browser($base))->post('/login', ['username' => 'e2enina', 'password' => 'e2e nina new password'], $origin), '/'));
+check('another account can’t set it', host_api($base, ['op' => 'team.password', 'acct' => 'somebody-else', 'member' => $ninaId, 'password' => 'hijacked e2e password'])['status'] === 409
+    && to((new Browser($base))->post('/login', ['username' => 'e2enina', 'password' => 'e2e nina new password'], $origin), '/'));
+check('and removing them ends it', host_api($base, ['op' => 'team.remove', 'acct' => 'e2e-A', 'member' => $ninaId])['status'] === 200 && host_api($base, ['op' => 'team.list', 'acct' => 'e2e-A'])['json']['members'] === []);
 check('GET is not the way to talk to it', $guest->get('/host/api')['status'] === 404);
 
 echo "Odds and ends\n";

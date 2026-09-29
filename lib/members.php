@@ -292,23 +292,78 @@ function lf_team_revoke(PDO $pdo, int $accountId, int $inviteId): void
     $pdo->prepare("DELETE FROM invites WHERE id = :i AND account_id = :a AND used_at IS NULL")->execute(['i' => $inviteId, 'a' => $accountId]);
 }
 
-// Takes somebody off the team. What they wrote stays, shown as "Former member". Account holders and the
-// forum's staff can't be removed this way.
-function lf_team_remove(PDO $pdo, int $accountId, int $memberId): ?string
+// Somebody on an account's team, for the host app to act on. Returns [member, null] or [null, message]. Account
+// holders (who come in through the host) and the forum's own staff are not part of the team. $what finishes the
+// message about staff: "removed", "changed".
+function lf_team_target(PDO $pdo, int $accountId, int $memberId, string $what): array
 {
     $stmt = $pdo->prepare("SELECT id, role, status, host_ref FROM members WHERE id = :m AND account_id = :a");
     $stmt->execute(['m' => $memberId, 'a' => $accountId]);
     $member = $stmt->fetch();
     if (!$member || $member['status'] === 'removed') {
-        return 'That person isn’t on your team.';
+        return [null, 'That person isn’t on your team.'];
     }
     if ($member['host_ref'] !== null) {
-        return 'That is an account holder, not a team member.';
+        return [null, 'That is an account holder, not a team member.'];
     }
     if ($member['role'] !== 'member') {
-        return 'Moderators can only be removed by the forum’s owner.';
+        return [null, "Moderators can only be $what by the forum’s owner."];
+    }
+    return [$member, null];
+}
+
+// Takes somebody off the team. What they wrote stays, shown as "Former member".
+function lf_team_remove(PDO $pdo, int $accountId, int $memberId): ?string
+{
+    [, $problem] = lf_team_target($pdo, $accountId, $memberId, 'removed');
+    if ($problem !== null) {
+        return $problem;
     }
     lf_member_wipe($pdo, $memberId);
+    return null;
+}
+
+// The account holder adds somebody to their team and chooses their username and password (the host app's team
+// page asks for both), and the person then logs in on the forum's own page. Returns [message, null] or [null, member id].
+function lf_team_create(PDO $pdo, int $accountId, string $username, string $password): array
+{
+    $username = trim($username);
+    $problem = lf_username_problem($pdo, $username) ?? lf_password_problem($password, $password);
+    if ($problem !== null) {
+        return [$problem, null];
+    }
+    $pdo->beginTransaction();
+    try {
+        // Lock the account, so two requests can't take the last place together.
+        $pdo->prepare("SELECT id FROM accounts WHERE id = :a FOR UPDATE")->execute(['a' => $accountId]);
+        if (lf_account_full($pdo, $accountId)) {
+            $pdo->rollBack();
+            return ['This account has no free places left.', null];
+        }
+        $memberId = lf_member_create($pdo, $accountId, $username, password_hash($password, PASSWORD_DEFAULT), 'member');
+        $pdo->commit();
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        if (lf_is_duplicate($e)) {
+            return ['That name is already taken.', null];
+        }
+        throw $e;
+    }
+    return [null, $memberId];
+}
+
+// A new password for somebody on the team, and every login of theirs ends. The account holder sets it: a team member
+// who forgets theirs asks the holder, and there is no other way to reset it (the forum keeps no email addresses).
+function lf_team_password(PDO $pdo, int $accountId, int $memberId, string $password): ?string
+{
+    [, $problem] = lf_team_target($pdo, $accountId, $memberId, 'changed');
+    $problem ??= lf_password_problem($password, $password);
+    if ($problem !== null) {
+        return $problem;
+    }
+    lf_password_set($pdo, $memberId, $password);
     return null;
 }
 
