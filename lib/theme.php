@@ -81,6 +81,15 @@ if (!function_exists('h')) {
     }
 }
 
+// The opening tag of a form that posts to a page of the forum, with the login's csrf value already in it.
+// $confirm asks "are you sure?" before sending (theme's forum.js does the asking).
+function lf_form(string $path, string $csrf, string $class = '', string $confirm = ''): string
+{
+    return '<form method="post" action="' . h(lf_url($path)) . '"' . ($class !== '' ? ' class="' . h($class) . '"' : '')
+        . ($confirm !== '' ? ' data-confirm="' . h($confirm) . '"' : '') . '>'
+        . '<input type="hidden" name="csrf" value="' . h($csrf) . '">';
+}
+
 // Small line icons, drawn here so nothing is loaded from anywhere. Colored by the text around them.
 function lf_icon(string $name): string
 {

@@ -1,0 +1,18 @@
+# LibreForum public folder (Apache). Only this folder should be the web root: lib/, bin/, sql/, tests/,
+# themes/ and config.php stay outside it.
+
+Options -Indexes
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Anything that isn't a real file (asset.php is one) is a page of the forum: /t/12, /c/help, /login...
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [L]
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "same-origin"
+</IfModule>

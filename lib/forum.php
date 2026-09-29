@@ -212,6 +212,26 @@ function lf_posts(PDO $pdo, int $threadId, int $page, int $perPage): array
     return ['posts' => $stmt->fetchAll(), 'total' => $total, 'page' => $page, 'pages' => $pages, 'first_id' => $firstId];
 }
 
+// The thread a post belongs to, when both are still there.
+function lf_post_thread_id(PDO $pdo, int $postId): ?int
+{
+    $stmt = $pdo->prepare(
+        "SELECT p.thread_id FROM posts p JOIN threads t ON t.id = p.thread_id
+         WHERE p.id = :p AND p.deleted_at IS NULL AND t.deleted_at IS NULL"
+    );
+    $stmt->execute(['p' => $postId]);
+    $id = $stmt->fetchColumn();
+    return $id === false ? null : (int) $id;
+}
+
+// Which page of its thread a post is on.
+function lf_post_page(PDO $pdo, int $threadId, int $postId, int $perPage): int
+{
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM posts WHERE thread_id = :t AND deleted_at IS NULL AND id < :p");
+    $stmt->execute(['t' => $threadId, 'p' => $postId]);
+    return intdiv((int) $stmt->fetchColumn(), max(1, $perPage)) + 1;
+}
+
 // The last post of a thread a member has read, or null if they never opened it.
 function lf_read_pointer(PDO $pdo, int $memberId, int $threadId): ?int
 {
@@ -483,14 +503,14 @@ function lf_reports_open(PDO $pdo): array
 {
     return $pdo->query(
         "SELECT p.id AS post_id, p.body, p.created_at AS post_at, t.id AS thread_id, t.title,
-                m.username, m.status AS member_status, m.role AS member_role,
+                m.id AS member_id, m.username, m.status AS member_status, m.role AS member_role,
                 COUNT(r.id) AS reports, MIN(r.created_at) AS first_reported
          FROM reports r
          JOIN posts p ON p.id = r.post_id
          JOIN threads t ON t.id = p.thread_id
          JOIN members m ON m.id = p.member_id
          WHERE r.handled_at IS NULL AND p.deleted_at IS NULL AND t.deleted_at IS NULL
-         GROUP BY p.id, t.id, t.title, m.username, m.status, m.role, p.body, p.created_at
+         GROUP BY p.id, t.id, t.title, m.id, m.username, m.status, m.role, p.body, p.created_at
          ORDER BY first_reported, p.id"
     )->fetchAll();
 }
